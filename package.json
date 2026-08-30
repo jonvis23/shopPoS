@@ -1,0 +1,62 @@
+{
+  "name": "duka-pos-cereal-edition",
+  "version": "0.1.0",
+  "private": true,
+  "//productName": "Electron reads the app name from HERE, not from build.productName. Without this the installed app fell back to `name` and stored its database in %APPDATA%\\duka-pos-cereal-edition — the same folder `npm run dev` uses — so a fresh install opened the development database instead of a new one.",
+  "productName": "Duka POS",
+  "description": "Offline-first Electron POS for cereal retail and wholesale shops.",
+  "author": "Duka POS",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "dist": "electron-vite build && electron-builder --win --publish=never"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.17.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^3.1.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.2"
+  },
+  "build": {
+    "appId": "com.dukapos.cerealedition",
+    "productName": "Duka POS",
+    "directories": {
+      "output": "C:\\Users\\Elvo\\AppData\\Local\\Temp\\duka-pos-dist"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      { "from": "resources/icon.ico", "to": "icon.ico" },
+      { "from": "resources/icon.png", "to": "icon.png" }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Duka POS",
+      "artifactName": "Duka POS Setup ${version}.exe",
+      "include": "build/installer.nsh"
+    }
+  }
+}

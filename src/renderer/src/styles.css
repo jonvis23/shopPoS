@@ -1,0 +1,203 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Inter Variable', 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184 / 0.5) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(148 163 184 / 0.5);
+  border-radius: 9999px;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+/* Every modal/drawer overlay root carries this. It ends the overlay box above the
+   docked on-screen keyboard, and — just as importantly — bounds the panel inside
+   it to the room that's left. Without the child rule a tall form (the product
+   editor, checkout) stays its natural height, and flex centring pushes its lower
+   half, Save button included, underneath the keyboard where it can't be tapped.
+   `overflow-y: auto` only engages when the panel genuinely doesn't fit, so
+   nothing changes while the keyboard is closed. */
+.osk-overlay {
+  bottom: var(--osk-height, 0px);
+}
+
+.osk-overlay > * {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Alternative light themes
+   ---------------------------------------------------------------------------
+   The default light theme is crisp white-on-slate, which is glary under the
+   shop's fluorescent lighting during a long shift. "Warm" (cream/paper) and
+   "Sage" (muted green-grey) keep the exact same layout and the emerald brand
+   accents, and only retint the neutral surfaces and text.
+
+   They work by re-pointing the handful of slate/white Tailwind utilities the UI
+   is actually built from at a palette variable. `html.theme-*` adds a second
+   class to each selector, so these beat the plain utility on specificity without
+   needing !important. The `.dark` variant is untouched — a theme class is only
+   ever set while the app is in light mode, so the two can't collide. */
+
+html.theme-warm {
+  --app-bg: #f2ece2;
+  --app-surface: #fbf7f1;
+  --app-sunken: #eae2d5;
+  --app-sunken-strong: #ded4c4;
+  --app-border: #e3d9c9;
+  --app-border-soft: #ece5d9;
+  --app-text-900: #33302b;
+  --app-text-800: #403b34;
+  --app-text-700: #4f4840;
+  --app-text-600: #665d52;
+  --app-text-500: #7d7365;
+  --app-text-400: #9a8f7e;
+  --app-text-300: #b8ac99;
+  --app-shell-gradient: linear-gradient(160deg, #f6f1e8 0%, #f0e8db 55%, #ece2d2 100%);
+}
+
+html.theme-sage {
+  --app-bg: #e9eeea;
+  --app-surface: #f5f8f6;
+  --app-sunken: #dde5df;
+  --app-sunken-strong: #cbd6ce;
+  --app-border: #d2dcd5;
+  --app-border-soft: #e0e8e2;
+  --app-text-900: #26302a;
+  --app-text-800: #2f3a33;
+  --app-text-700: #3d4a42;
+  --app-text-600: #556158;
+  --app-text-500: #6c786f;
+  --app-text-400: #8b9790;
+  --app-text-300: #a8b4ac;
+  --app-shell-gradient: linear-gradient(160deg, #eef2ef 0%, #e7eee9 55%, #dfe8e2 100%);
+}
+
+/* :is() (not :where()) so the theme class actually contributes specificity. */
+:is(html.theme-warm, html.theme-sage) {
+  .bg-white,
+  .bg-white\/95 {
+    background-color: var(--app-surface);
+  }
+
+  .bg-slate-50 {
+    background-color: var(--app-bg);
+  }
+
+  .bg-slate-50\/50 {
+    background-color: color-mix(in srgb, var(--app-bg) 55%, transparent);
+  }
+
+  .bg-slate-100,
+  .hover\:bg-slate-100:hover {
+    background-color: var(--app-sunken);
+  }
+
+  .bg-slate-200,
+  .hover\:bg-slate-200:hover {
+    background-color: var(--app-sunken-strong);
+  }
+
+  .hover\:bg-slate-50:hover {
+    background-color: color-mix(in srgb, var(--app-sunken) 55%, transparent);
+  }
+
+  .border-slate-200,
+  .border-slate-200\/60 {
+    border-color: var(--app-border);
+  }
+
+  .border-slate-100 {
+    border-color: var(--app-border-soft);
+  }
+
+  .text-slate-900 {
+    color: var(--app-text-900);
+  }
+
+  .text-slate-800 {
+    color: var(--app-text-800);
+  }
+
+  .text-slate-700 {
+    color: var(--app-text-700);
+  }
+
+  .text-slate-600,
+  .hover\:text-slate-600:hover {
+    color: var(--app-text-600);
+  }
+
+  .text-slate-500 {
+    color: var(--app-text-500);
+  }
+
+  .text-slate-400 {
+    color: var(--app-text-400);
+  }
+
+  .text-slate-300 {
+    color: var(--app-text-300);
+  }
+
+  /* The gradient is limited to the full-window shell — running it behind every
+     `bg-slate-50` element (table headers, chips) would band oddly at small sizes. */
+  .app-shell {
+    background-image: var(--app-shell-gradient);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
