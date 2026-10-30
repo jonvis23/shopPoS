@@ -32,10 +32,10 @@ export function summarizeStock(totalKg: number, kgPerBag: number = KG_PER_BAG): 
   const remainderLabel = remainderKg > 0 ? `${trimKg(remainderKg)} kg` : ''
   const totalLabel = `${trimKg(normalizedKg)} kg`
 
-  // Under one full bag the total would just repeat the remainder, so the
-  // parenthesised weight is dropped rather than printed twice.
-  const parts = [bagsLabel, remainderLabel].filter(Boolean)
-  const label = bags > 0 ? `${parts.join(' ')} (${totalLabel})` : parts.join(' ')
+  // Under one full bag, "0 bags" names a bag count that never happened rather
+  // than describing the stock — so the label drops it and reads as a plain
+  // weight instead of parenthesising a total that would just repeat it.
+  const label = bags > 0 ? `${[bagsLabel, remainderLabel].filter(Boolean).join(' ')} (${totalLabel})` : totalLabel
 
   return { totalKg: normalizedKg, bags, remainderKg, bagsLabel, remainderLabel, totalLabel, label }
 }
@@ -46,7 +46,7 @@ export function summarizeStock(totalKg: number, kgPerBag: number = KG_PER_BAG): 
  * `minStockAlertKg` still counts too, so a per-product threshold set higher than
  * five bags keeps working.
  */
-export const LOW_STOCK_BAGS = 5
+export const LOW_STOCK_BAGS = 1
 
 export function isLowStock(totalWeightKg: number, weightPerBag: number, minStockAlertKg: number): boolean {
   const bagSize = weightPerBag > 0 ? weightPerBag : KG_PER_BAG
@@ -136,12 +136,41 @@ export function sanitizeNumericInput(input: string): string {
 
 export const WHOLESALE_MIN_KG = 5
 
-export interface ResolvedPrice {
-  price: number
-  mode: 'retail' | 'wholesale'
+/**
+ * What one cart line costs, to the whole shilling. Nobody at the counter deals
+ * in cents, and an unrounded line is how "nipe ya mia" used to come out at
+ * KES 100.10 — the stray ten cents then read as debt and blocked a walk-in sale.
+ * The renderer and recordSale both price through here so the two always agree.
+ */
+export function lineSubtotal(quantityKg: number, unitPricePerKg: number): number {
+  return Math.round(quantityKg * unitPricePerKg)
 }
 
-export function resolveUnitPrice(qtyKg: number, retailPricePerKg: number, wholesalePricePerKg: number): ResolvedPrice {
+// Gram precision. Two decimals (10 g) was too coarse for amount-first sales: at
+// KES 300/kg the rounding alone could move the line by more than a shilling.
+export function roundQtyKg(kg: number): number {
+  return Math.round(kg * 1000) / 1000
+}
+
+export type PriceMode = 'retail' | 'wholesale' | 'fraction'
+
+export interface ResolvedPrice {
+  price: number
+  mode: PriceMode
+}
+
+// Fraction prices (a flat KSh figure for a specific small weight — see
+// ProductPriceBreak in shared/ipc.ts) are checked before the retail/wholesale
+// tier, since they exist precisely because that tier doesn't scale down
+// correctly for a quarter-kilo scoop.
+export function resolveUnitPrice(
+  qtyKg: number,
+  retailPricePerKg: number,
+  wholesalePricePerKg: number,
+  priceBreaks: { quantityKg: number; price: number }[] = []
+): ResolvedPrice {
+  const match = priceBreaks.find((b) => roundKg(b.quantityKg) === roundKg(qtyKg))
+  if (match) return { price: match.price / qtyKg, mode: 'fraction' }
   if (wholesalePricePerKg > 0 && qtyKg >= WHOLESALE_MIN_KG) {
     return { price: wholesalePricePerKg, mode: 'wholesale' }
   }
@@ -150,14 +179,70 @@ export function resolveUnitPrice(qtyKg: number, retailPricePerKg: number, wholes
 
 export interface ResolvedQty {
   qty: number
-  mode: 'retail' | 'wholesale'
+  mode: PriceMode
 }
 
-export function resolveQtyFromAmount(amountKes: number, retailPricePerKg: number, wholesalePricePerKg: number): ResolvedQty {
+export function resolveQtyFromAmount(
+  amountKes: number,
+  retailPricePerKg: number,
+  wholesalePricePerKg: number,
+  priceBreaks: { quantityKg: number; price: number }[] = []
+): ResolvedQty {
+  // An amount that lands exactly on a defined break's price resolves to that
+  // break's weight — typing "40" for a KSh-40 quarter-kilo gives 0.25kg, not
+  // whatever 40 ÷ per-kg-price happens to work out to.
+  const match = priceBreaks.find((b) => roundKg(b.price) === roundKg(amountKes))
+  if (match) return { qty: match.quantityKg, mode: 'fraction' }
   if (retailPricePerKg <= 0) return { qty: 0, mode: 'retail' }
   const qtyAtRetail = amountKes / retailPricePerKg
   if (wholesalePricePerKg > 0 && qtyAtRetail >= WHOLESALE_MIN_KG) {
     return { qty: amountKes / wholesalePricePerKg, mode: 'wholesale' }
   }
   return { qty: qtyAtRetail, mode: 'retail' }
+}
+
+export interface PricingProduct {
+  name: string
+  retailPricePerKg: number
+  wholesalePricePerKg: number
+  priceBreaks: { quantityKg: number; price: number }[]
+}
+
+export interface PricedSaleLine {
+  productId: number
+  quantityKg: number
+  unitPricePerKg: number
+  subtotal: number
+}
+
+/**
+ * Prices a sale from the product list rather than from what the till sent. Each
+ * product is priced on its combined weight, the same way the cart re-tiers a merged
+ * line. A line whose price disagrees with the list means the price changed after
+ * the cart was built, so the sale is refused rather than charged at a stale figure.
+ */
+export function priceSaleLines(
+  lines: Array<{ productId: number; quantityKg: number; unitPricePerKg: number }>,
+  products: Map<number, PricingProduct>
+): PricedSaleLine[] {
+  const totalKgByProduct = new Map<number, number>()
+  for (const line of lines) {
+    totalKgByProduct.set(line.productId, (totalKgByProduct.get(line.productId) ?? 0) + line.quantityKg)
+  }
+
+  return lines.map((line) => {
+    const product = products.get(line.productId)
+    if (!product) throw new Error('A product in this sale no longer exists')
+    const { price } = resolveUnitPrice(
+      totalKgByProduct.get(line.productId) ?? 0,
+      product.retailPricePerKg,
+      product.wholesalePricePerKg,
+      product.priceBreaks
+    )
+    const subtotal = lineSubtotal(line.quantityKg, price)
+    if (subtotal !== lineSubtotal(line.quantityKg, line.unitPricePerKg)) {
+      throw new Error(`The price of ${product.name} has changed since it was added. Remove it and add it again.`)
+    }
+    return { productId: line.productId, quantityKg: line.quantityKg, unitPricePerKg: price, subtotal }
+  })
 }

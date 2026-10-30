@@ -17,7 +17,7 @@ export function Keypad({ onKey, disabled }: KeypadProps) {
           disabled={disabled}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => onKey(key)}
-          className="flex h-full w-full items-center justify-center rounded-xl bg-slate-100 text-base font-medium tabular-nums text-slate-700 shadow-sm transition-all duration-100 hover:bg-slate-200 active:scale-95 active:bg-slate-300 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 dark:active:bg-slate-600"
+          className="flex h-full w-full items-center justify-center rounded-xl bg-slate-100 text-sm font-medium tabular-nums text-slate-700 shadow-sm transition-all duration-100 hover:bg-slate-200 active:scale-95 active:bg-slate-300 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 dark:active:bg-slate-600"
         >
           {key === 'back' ? '⌫' : key}
         </button>

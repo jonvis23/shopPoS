@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { MoreIcon, PrinterIcon, TagIcon } from '../Icons'
+import { MoreIcon, PackageIcon, PrinterIcon, TagIcon } from '../Icons'
 
 interface StockToolsMenuProps {
   printingPriceList: boolean
+  hasActiveShift: boolean
+  onCountDelivery: () => void
   onAddCategory: () => void
   onPrintPriceList: () => void
 }
@@ -10,7 +12,13 @@ interface StockToolsMenuProps {
 const item =
   'flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800'
 
-export function StockToolsMenu({ printingPriceList, onAddCategory, onPrintPriceList }: StockToolsMenuProps) {
+export function StockToolsMenu({
+  printingPriceList,
+  hasActiveShift,
+  onCountDelivery,
+  onAddCategory,
+  onPrintPriceList,
+}: StockToolsMenuProps) {
   const [open, setOpen] = useState(false)
   const wrapper = useRef<HTMLDivElement>(null)
 
@@ -50,6 +58,19 @@ export function StockToolsMenu({ printingPriceList, onAddCategory, onPrintPriceL
 
       {open && (
         <div className="absolute right-0 z-30 mt-1.5 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          <button
+            type="button"
+            disabled={!hasActiveShift}
+            onClick={() => run(onCountDelivery)}
+            title={
+              hasActiveShift
+                ? "Tally bags as a delivery is offloaded, review the count, then add it to stock — the tool for counting under pressure."
+                : 'Open a shift first'
+            }
+            className={item}
+          >
+            <PackageIcon width={14} height={14} className="text-slate-400" /> Count delivery…
+          </button>
           <button
             type="button"
             onClick={() => run(onAddCategory)}

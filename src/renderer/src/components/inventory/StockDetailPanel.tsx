@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react'
 import { LOW_STOCK_BAGS, toCurrency } from '../../../../shared/stock'
-import { AlertIcon, LockIcon, PackageIcon, PlusIcon } from '../Icons'
+import { AlertIcon, PackageIcon, PlusIcon } from '../Icons'
 import { RestockHistory } from './RestockHistory'
 import { TakeHomeHistory } from './TakeHomeHistory'
 import type { StockRow } from './StockGrid'
 
 interface StockDetailPanelProps {
   row: StockRow | null
-  isAdmin: boolean
+  canManageProducts: boolean
   hasActiveShift: boolean
   /** Bumped by any change to the logs below — a delivery or a take-home. */
   historyRefreshKey: number
@@ -33,7 +33,7 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
 
 export function StockDetailPanel({
   row,
-  isAdmin,
+  canManageProducts,
   hasActiveShift,
   historyRefreshKey,
   onRestock,
@@ -78,7 +78,7 @@ export function StockDetailPanel({
   // printing a bag threshold at a product whose own kg alert is what triggered.
   const lowReason =
     stock.bags < LOW_STOCK_BAGS
-      ? `Running out — under ${LOW_STOCK_BAGS} bags`
+      ? `Running out — under ${LOW_STOCK_BAGS} bag`
       : `At or below the ${product.minStockAlertKg} kg alert level`
 
   return (
@@ -131,15 +131,7 @@ export function StockDetailPanel({
           <DetailRow label="Wholesale / kg">
             {product.wholesalePricePerKg > 0 ? toCurrency(product.wholesalePricePerKg) : '—'}
           </DetailRow>
-          <DetailRow label="Buying price / bag">
-            {isAdmin ? (
-              toCurrency(product.buyingPricePerBag)
-            ) : (
-              <span className="flex items-center gap-1 text-slate-400">
-                <LockIcon width={12} height={12} /> Admin only
-              </span>
-            )}
-          </DetailRow>
+          {canManageProducts && <DetailRow label="Buying price / bag">{toCurrency(product.buyingPricePerBag)}</DetailRow>}
           <DetailRow label="Alert below">{product.minStockAlertKg} kg</DetailRow>
         </div>
 
@@ -162,13 +154,17 @@ export function StockDetailPanel({
           >
             Take home
           </button>
-          <button type="button" onClick={onEdit} className={secondaryAction}>
-            Edit details
-          </button>
-          <button type="button" onClick={onToggleActive} className={secondaryAction}>
-            {product.isActive ? 'Deactivate' : 'Activate'}
-          </button>
-          {isAdmin && (
+          {canManageProducts && (
+            <button type="button" onClick={onEdit} className={secondaryAction}>
+              Edit details
+            </button>
+          )}
+          {canManageProducts && (
+            <button type="button" onClick={onToggleActive} className={secondaryAction}>
+              {product.isActive ? 'Deactivate' : 'Activate'}
+            </button>
+          )}
+          {canManageProducts && (
             <button
               type="button"
               onClick={onRemove}

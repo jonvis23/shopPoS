@@ -19,12 +19,6 @@ const fieldLabel = 'block text-xs font-semibold text-slate-500 dark:text-slate-4
 const fieldInput =
   'mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
 
-function pillClass(active: boolean): string {
-  return `flex-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-all duration-150 ${
-    active ? 'bg-white text-slate-800 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 dark:text-slate-400'
-  }`
-}
-
 export function DomesticConsumptionDrawer({
   productId,
   products,
@@ -34,18 +28,17 @@ export function DomesticConsumptionDrawer({
   showToast,
 }: DomesticConsumptionDrawerProps) {
   const product = products.find((p) => p.id === productId) ?? null
-  const [unitMode, setUnitMode] = useState<'BAGS' | 'KG'>('KG')
   const [quantity, setQuantity] = useState('')
   const [cost, setCost] = useState('')
   const [costTouched, setCostTouched] = useState(false)
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const quantityKg = product
-    ? unitMode === 'BAGS'
-      ? (Number(quantity) || 0) * product.weightPerBag
-      : Number(quantity) || 0
-    : 0
+  // Kilograms only — a bag toggle here invited a bag count to be typed and left
+  // unconverted against the wrong field, over- or under-recording what actually
+  // left the shelf. Kg is also the one unit every stock number in this app
+  // already speaks, so there's nothing to convert on the way in.
+  const quantityKg = Number(quantity) || 0
 
   const suggestedCost = product ? costPerKg(product.buyingPricePerBag, product.weightPerBag) * quantityKg : 0
   const effectiveCost = costTouched ? Number(cost) || 0 : suggestedCost
@@ -101,18 +94,9 @@ export function DomesticConsumptionDrawer({
               {product.name}
             </div>
 
-            <div className="mt-3 flex items-center gap-1 rounded-full bg-slate-100 p-1 dark:bg-slate-800">
-              <button type="button" onClick={() => setUnitMode('BAGS')} className={pillClass(unitMode === 'BAGS')}>
-                Bags ({product.weightPerBag}kg)
-              </button>
-              <button type="button" onClick={() => setUnitMode('KG')} className={pillClass(unitMode === 'KG')}>
-                Kilograms
-              </button>
-            </div>
-
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
-                <label className={fieldLabel}>{unitMode === 'BAGS' ? 'Number of bags' : 'Quantity (kg)'}</label>
+                <label className={fieldLabel}>Quantity (kg)</label>
                 <FormattedNumberInput value={quantity} onChange={setQuantity} className={fieldInput} />
               </div>
               <div>

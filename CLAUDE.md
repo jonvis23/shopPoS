@@ -8,12 +8,16 @@ no server, no cloud, no network calls anywhere. Everything lives in one local SQ
 ```bash
 npm run dev        # electron-vite dev — uses a SEPARATE "Duka POS (dev)" userData dir
 npm run typecheck  # tsc twice: tsconfig.node.json (main+preload) then tsconfig.json (renderer)
+npm test           # vitest: pricing, discounts, shift cash, debt — runs against temp SQLite files
 npm run build      # bundles to out/
 npm run dist       # build + electron-builder --win (NSIS installer)
 ```
 
-There is no test suite, linter, or CI. `npm run typecheck` is the only automated check —
-run it after any change that crosses the process boundary.
+There is no linter or CI. `npm run typecheck` and `npm test` are the automated checks —
+run both after any change to money logic (`recordSale`, shift totals, analytics, pricing in
+`shared/stock.ts`), and `npm run typecheck` after any change that crosses the process boundary.
+Tests live beside the code they cover (`*.test.ts`). A failing money test means a real figure
+would be wrong: fix the code, don't change the expected number to match.
 
 ## Architecture
 
@@ -71,8 +75,7 @@ PINs are 4 digits, hashed with `scryptSync` + a per-user 16-byte salt, compared 
 export/import, `enterPracticeMode`, and `setSetting` for any key prefixed `perm_` or `printer_`.
 
 > **Known gap:** several write handlers do not check `currentUser` and trust the renderer-supplied
-> `shiftId` — `recordExpense`, `receiveStock`, `recordDomesticConsumption`, `recordCustomerDebt`,
-> `recordDebtRepayment`, `closeShift`, `createCategory`, and the product mutators. The pattern
+> `shiftId` — `recordExpense`, `receiveStock`, `recordDomesticConsumption`, and `createCategory`. The pattern
 > exists but is applied unevenly. Adding a check to any of these is a welcome fix; adding a new
 > handler *without* one continues a bug.
 

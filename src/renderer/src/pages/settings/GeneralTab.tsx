@@ -5,7 +5,7 @@ import { LockIcon } from '../../components/Icons'
 
 interface GeneralTabProps {
   settings: Record<string, string>
-  isAdmin: boolean
+  canManageSettings: boolean
   onSettingsChanged: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
 }
@@ -16,14 +16,13 @@ const fieldInput =
 
 const FIELDS: Array<{ key: string; label: string }> = [
   { key: 'shop_name', label: 'Shop name' },
-  { key: 'shop_tagline', label: 'Tagline' },
   { key: 'shop_branch', label: 'Branch / location' },
   { key: 'shop_phone', label: 'Contact phone' },
   { key: 'shop_email', label: 'Contact email' },
   { key: 'currency', label: 'Currency code' },
 ]
 
-export function GeneralTab({ settings, isAdmin, onSettingsChanged, showToast }: GeneralTabProps) {
+export function GeneralTab({ settings, canManageSettings, onSettingsChanged, showToast }: GeneralTabProps) {
   const [form, setForm] = useState<Record<string, string>>(() =>
     Object.fromEntries(FIELDS.map((f) => [f.key, settings[f.key] ?? '']))
   )
@@ -49,7 +48,7 @@ export function GeneralTab({ settings, isAdmin, onSettingsChanged, showToast }: 
     <div className="max-w-lg rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <h3 className="text-sm font-bold tracking-tight text-slate-800 dark:text-slate-100">Business profile</h3>
 
-      {isAdmin ? (
+      {canManageSettings ? (
         <form onSubmit={save}>
           {FIELDS.map((field) => (
             <div key={field.key}>
@@ -78,7 +77,7 @@ export function GeneralTab({ settings, isAdmin, onSettingsChanged, showToast }: 
             </div>
           ))}
           <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
-            <LockIcon width={12} height={12} /> Sign in as Admin to edit these.
+            <LockIcon width={12} height={12} /> Ask an admin with the settings right to change these.
           </p>
         </div>
       )}

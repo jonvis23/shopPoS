@@ -1,6 +1,7 @@
 import type { PosDatabase } from './database'
 import type { ProductRecord, SessionUser } from '../shared/ipc'
-import { resolveUnitPrice } from '../shared/stock'
+import { ADMIN_RIGHTS, hasRight } from '../shared/rights'
+import { lineSubtotal, resolveUnitPrice } from '../shared/stock'
 
 /**
  * Generates a few weeks of believable trading into the practice database.
@@ -113,6 +114,18 @@ export function generatePracticeData(
   const products = db.listProducts().filter((product) => product.isActive)
   if (products.length === 0) return { days, sales: 0, expenses: 0, shifts: 0 }
 
+  // The feature scenarios need two people with no rights to hand the till between and to
+  // add stock as cashiers, and one person with every right to approve it. Anyone missing
+  // is added to the practice copy only, so the real shop's staff are never touched.
+  const isCashier = (user: SessionUser) => user.rights.length === 0
+  const crew = [...staff]
+  for (let n = crew.filter(isCashier).length; n < 2; n += 1) {
+    const created = db.createUser({ name: `Practice cashier ${n + 1}`, rights: [], pin: `${n + 1}`.repeat(4) })
+    crew.push({ id: created.id, name: created.name, role: created.role, rights: created.rights })
+  }
+  const cashiers = crew.filter(isCashier)
+  const manager = crew.find((user) => ADMIN_RIGHTS.every((right) => hasRight(user, right))) ?? actingUser
+
   // A practice shop needs stock to sell. Enough that six weeks of trading never
   // runs a product dry mid-generation, but still a number an owner recognises.
   // The running total is tracked here too so a cart is never built against stock
@@ -161,6 +174,9 @@ export function generatePracticeData(
   let salesMade = 0
   let expensesMade = 0
   let shiftsMade = 0
+  // The till left open on the last day, which the feature scenarios are written into.
+  let openShiftId = 0
+  let openCashier: SessionUser | null = null
 
   db.setDurability(false)
   try {
@@ -171,7 +187,7 @@ export function generatePracticeData(
       const isLastDay = dayOffset === 0
       const sunday = day.getDay() === 0
 
-      const cashier = staff.length > 0 ? pick(staff) : actingUser
+      const cashier = isLastDay ? pick(cashiers) : pick(crew)
       const shift = db.openShift(
         { openingCash: intBetween(2, 10) * 500, openingMpesa: 0, notes: undefined },
         cashier
@@ -205,7 +221,9 @@ export function generatePracticeData(
         }
         if (items.length === 0) continue
 
-        const total = items.reduce((sum, item) => sum + item.quantityKg * item.unitPricePerKg, 0)
+        // Priced line by line exactly as recordSale prices it — summing the raw
+        // products instead can come out a shilling under, which reads as debt.
+        const total = items.reduce((sum, item) => sum + lineSubtotal(item.quantityKg, item.unitPricePerKg), 0)
         const roll = random()
         let customerName = 'Walk-in'
         let cashPaid = 0
@@ -258,15 +276,42 @@ export function generatePracticeData(
         // The most recent day is left open so the till is ready to sell into the
         // moment practice mode starts.
         db.backdateShift(shift.id, toUtc(opened), null)
+        openShiftId = shift.id
+        openCashier = cashier
       } else {
         const closed = new Date(day)
         closed.setHours(19, intBetween(0, 45), 0, 0)
-        const summary = db.closeShift({
-          shiftId: shift.id,
-          closingCashActual: 0,
-          closingMpesaActual: 0,
-          notes: undefined,
-        })
+        // One day's till changes hands at lunchtime, so the hand-over and its count
+        // appear in the shift history. The count matches the till, so it shows no variance.
+        let closer = cashier
+        if (dayOffset === HANDOVER_DAY_OFFSET) {
+          const incoming = cashiers.find((user) => user.id !== cashier.id)
+          if (incoming) {
+            const expected = db.expectedCountsOf(shift.id)
+            db.handoverShift(
+              {
+                shiftId: shift.id,
+                toUserId: incoming.id,
+                closingCashActual: expected.expectedCash,
+                closingMpesaActual: expected.expectedMpesa,
+                expensesReviewed: true,
+                notes: 'Lunchtime hand-over (practice sample)',
+              },
+              cashier
+            )
+            closer = incoming
+          }
+        }
+        const summary = db.closeShift(
+          {
+            shiftId: shift.id,
+            closingCashActual: 0,
+            closingMpesaActual: 0,
+            expensesReviewed: true,
+            notes: undefined,
+          },
+          closer
+        )
         // Counted takings match the till exactly most days, with the odd small
         // discrepancy — a shift history where every variance is zero teaches
         // nothing about reading one.
@@ -279,9 +324,93 @@ export function generatePracticeData(
         db.backdateShift(shift.id, toUtc(opened), toUtc(closed))
       }
     }
+    if (openCashier) {
+      seedFeatureScenarios(db, {
+        shiftId: openShiftId,
+        cashier: openCashier,
+        manager,
+        products: db.listProducts().filter((product) => product.isActive),
+      })
+    }
   } finally {
     db.setDurability(true)
   }
 
   return { days, sales: salesMade, expenses: expensesMade, shifts: shiftsMade }
+}
+
+// Which past day the till changes hands mid-shift. Counted from the newest day back.
+const HANDOVER_DAY_OFFSET = 4
+
+interface FeatureScenarioOptions {
+  shiftId: number
+  cashier: SessionUser
+  manager: SessionUser
+  products: ProductRecord[]
+}
+
+// One example of each stock, take-home, monthly bill and audit case added recently, so
+// every screen has something to show. The stock, take-home and bills go through the same
+// calls the till uses. The audit lines are sample entries, not records of real events.
+function seedFeatureScenarios(
+  db: PosDatabase,
+  { shiftId, cashier, manager, products }: FeatureScenarioOptions
+): void {
+  const product = (index: number) => products[index % products.length]
+  const kgForBags = (item: ProductRecord, bags: number) => item.weightPerBag * bags
+  const costOf = (item: ProductRecord, kg: number) => Math.round((item.buyingPricePerBag / item.weightPerBag) * kg)
+
+  // Deliveries. The cashier's two wait for the owner. The owner's is approved as it
+  // goes in. The cashier's last one is rejected, which takes it back out of stock.
+  db.receiveStock(
+    { shiftId, productId: product(0).id, addedKg: kgForBags(product(0), 4), referenceNote: 'Mwea supplier, DN #4521' },
+    cashier
+  )
+  db.receiveStock({ shiftId, productId: product(1).id, addedKg: kgForBags(product(1), 2) }, cashier)
+  db.receiveStock(
+    { shiftId, productId: product(2).id, addedKg: kgForBags(product(2), 3), referenceNote: 'Added by the owner' },
+    manager
+  )
+  db.receiveStock({ shiftId, productId: product(3).id, addedKg: kgForBags(product(3), 2), referenceNote: 'No note' }, cashier)
+  const [wrongDelivery] = db.listStockReceipts(1)
+  db.rejectStockReceipt({ id: wrongDelivery.id, reason: 'Wrong product on the lorry' }, manager)
+
+  // Take-home. One waits to be seen, one the owner took and so is already seen, and one
+  // was entered by mistake and voided.
+  db.recordDomesticConsumption(
+    { shiftId, productId: product(0).id, quantityKg: 5, costValue: costOf(product(0), 5), notes: 'For the house' },
+    cashier
+  )
+  db.recordDomesticConsumption(
+    { shiftId, productId: product(1).id, quantityKg: 3, costValue: costOf(product(1), 3), notes: "Owner's house" },
+    manager
+  )
+  const mistake = db.recordDomesticConsumption(
+    { shiftId, productId: product(2).id, quantityKg: 2, costValue: costOf(product(2), 2) },
+    cashier
+  )
+  db.voidDomesticConsumption(mistake.id, 'Entered by mistake', manager)
+
+  // Monthly bills, which only someone with the monthly bills right can record.
+  db.recordExpense({
+    shiftId,
+    category: 'Rent',
+    amount: 25000,
+    description: 'Shop rent, this month',
+    paymentMethod: 'MPESA',
+    kind: 'MONTHLY',
+  })
+  db.recordExpense({
+    shiftId,
+    category: 'Electricity',
+    amount: 4200,
+    description: 'KPLC token',
+    paymentMethod: 'MPESA',
+    kind: 'MONTHLY',
+  })
+
+  // Audit trail entries for the overrides. Each is written the way the real action writes it.
+  db.logAudit(manager, 'FORCED_LOGOUT', `${cashier.name} logged out mid-shift: till frozen, needed at the counter`)
+  db.logAudit(manager, 'SHIFT_OVERRIDE_SIGN_IN', `Another person signed in to ${cashier.name}'s shift: owner at the market`)
+  db.logAudit(manager, 'EXIT_OVERRIDE', `Closed the app with ${cashier.name}'s shift still open: power cut, UPS flat`)
 }

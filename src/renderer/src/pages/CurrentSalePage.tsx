@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import type { DashboardSnapshot, ReceiptDraft } from '../../../shared/ipc'
-import { resolveQtyFromAmount, resolveUnitPrice } from '../../../shared/stock'
+import type { DashboardSnapshot, ProductRecord, ReceiptDraft, SaleInput, SaleRecord } from '../../../shared/ipc'
+import { formatReceiptNumber, lineSubtotal, resolveQtyFromAmount, resolveUnitPrice, roundQtyKg } from '../../../shared/stock'
 import type { ToastState } from '../components/Toast'
 import { PlusIcon, XIcon } from '../components/Icons'
 import { ProductGrid } from '../components/pos/ProductGrid'
 import { ProductDetailPanel } from '../components/pos/ProductDetailPanel'
 import type { ActiveField } from '../components/pos/ProductDetailPanel'
 import { CartPanel } from '../components/pos/CartPanel'
+import { mergeLine, priceLine } from '../components/pos/cartLines'
 import type { CartLine } from '../components/pos/CartPanel'
 import { CheckoutModal } from '../components/pos/CheckoutModal'
 import type { CheckoutPayload } from '../components/pos/CheckoutModal'
@@ -16,6 +17,9 @@ import { ResizeHandle } from '../components/pos/ResizeHandle'
 interface SaleTab {
   id: number
   items: CartLine[]
+  // Set when this tab re-rings a recorded sale: checkout replaces that sale instead of
+  // recording a new one. originalKg is what that sale holds, which the edit gives back to stock.
+  editOf?: { saleId: number; customerName: string; customerPhone: string; originalKg: Record<number, number> }
 }
 
 const LAYOUT_KEY = 'duka-pos-layout'
@@ -47,26 +51,25 @@ function loadLayout(): { gridWidth: number; cartWidth: number } {
 
 interface CurrentSalePageProps {
   snapshot: DashboardSnapshot
-  isAdmin: boolean
+  canApproveDiscounts: boolean
   onTabCountChange: (count: number) => void
   onProductsChanged: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
+  /** A recorded sale the admin chose to edit from Transactions. Loaded into a new tab, then cleared. */
+  saleToEdit: SaleRecord | null
+  onSaleToEditLoaded: () => void
 }
 
-function mergeLine(items: CartLine[], line: CartLine): CartLine[] {
-  const existingIndex = items.findIndex(
-    (item) => item.productId === line.productId && item.unitPricePerKg === line.unitPricePerKg
-  )
-  if (existingIndex === -1) return [...items, line]
-  const next = [...items]
-  const merged = next[existingIndex]
-  const quantityKg = merged.quantityKg + line.quantityKg
-  next[existingIndex] = { ...merged, quantityKg, subtotal: quantityKg * merged.unitPricePerKg }
-  return next
-}
-
-export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProductsChanged, showToast }: CurrentSalePageProps) {
-  const canApplyDiscount = isAdmin || snapshot.settings.perm_allow_cashier_discount === 'true'
+export function CurrentSalePage({
+  snapshot,
+  canApproveDiscounts,
+  onTabCountChange,
+  onProductsChanged,
+  showToast,
+  saleToEdit,
+  onSaleToEditLoaded,
+}: CurrentSalePageProps) {
+  const canApplyDiscount = canApproveDiscounts || snapshot.settings.perm_allow_cashier_discount === 'true'
   const [tabs, setTabs] = useState<SaleTab[]>([{ id: 1, items: [] }])
   const [activeTabId, setActiveTabId] = useState(1)
   const [nextTabId, setNextTabId] = useState(2)
@@ -104,10 +107,18 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
   }, [tabs.length, onTabCountChange])
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
+
+  // Stock the open edit gives back on submit, so it counts as available while editing.
+  const availableKg = (product: ProductRecord) => product.totalWeightKg + (activeTab.editOf?.originalKg[product.id] ?? 0)
   const selectedProduct = snapshot.products.find((product) => product.id === selectedProductId) ?? null
   const qtyNum = Number(qtyStr) || 0
   const { price: unitPrice, mode: priceMode } = selectedProduct
-    ? resolveUnitPrice(qtyNum, selectedProduct.retailPricePerKg, selectedProduct.wholesalePricePerKg)
+    ? resolveUnitPrice(
+        qtyNum,
+        selectedProduct.retailPricePerKg,
+        selectedProduct.wholesalePricePerKg,
+        selectedProduct.priceBreaks
+      )
     : { price: 0, mode: 'retail' as const }
 
   const resetSelection = () => {
@@ -116,6 +127,44 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
     setAmountStr('0')
     setActiveField('qty')
   }
+
+  // Lines come back at today's catalogue price, not the price on the old receipt: the
+  // server prices the replacement from the product list and refuses a stale price.
+  useEffect(() => {
+    if (!saleToEdit) return
+    const originalKg: Record<number, number> = {}
+    const items = saleToEdit.items.map((item): CartLine => {
+      originalKg[item.productId] = (originalKg[item.productId] ?? 0) + item.quantityKg
+      const line: CartLine = {
+        productId: item.productId,
+        name: item.productName,
+        quantityKg: item.quantityKg,
+        unitPricePerKg: item.unitPricePerKg,
+        subtotal: item.subtotal,
+      }
+      const product = snapshot.products.find((p) => p.id === item.productId)
+      return product ? priceLine(line, item.quantityKg, product) : line
+    })
+    setTabs((prev) => [
+      ...prev,
+      {
+        id: nextTabId,
+        items,
+        editOf: {
+          saleId: saleToEdit.id,
+          customerName: saleToEdit.customerName === 'Walk-in' ? '' : saleToEdit.customerName,
+          customerPhone: saleToEdit.customerPhone ?? '',
+          originalKg,
+        },
+      },
+    ])
+    setActiveTabId(nextTabId)
+    setNextTabId((id) => id + 1)
+    resetSelection()
+    setSearchQuery('')
+    setCategoryFilterId(null)
+    onSaleToEditLoaded()
+  }, [saleToEdit])
 
   const addTab = () => {
     setTabs((prev) => [...prev, { id: nextTabId, items: [] }])
@@ -154,16 +203,33 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
     setQtyStr(value)
     if (!selectedProduct) return
     const nextQty = Number(value) || 0
-    const { price } = resolveUnitPrice(nextQty, selectedProduct.retailPricePerKg, selectedProduct.wholesalePricePerKg)
-    setAmountStr((nextQty * price).toFixed(2))
+    const { price } = resolveUnitPrice(
+      nextQty,
+      selectedProduct.retailPricePerKg,
+      selectedProduct.wholesalePricePerKg,
+      selectedProduct.priceBreaks
+    )
+    setAmountStr(String(lineSubtotal(nextQty, price)))
   }
 
   const updateAmount = (value: string) => {
     setAmountStr(value)
     if (!selectedProduct) return
     const amtNum = Number(value) || 0
-    const { qty } = resolveQtyFromAmount(amtNum, selectedProduct.retailPricePerKg, selectedProduct.wholesalePricePerKg)
-    setQtyStr(qty.toFixed(2))
+    const { qty } = resolveQtyFromAmount(
+      amtNum,
+      selectedProduct.retailPricePerKg,
+      selectedProduct.wholesalePricePerKg,
+      selectedProduct.priceBreaks
+    )
+    setQtyStr(String(roundQtyKg(qty)))
+  }
+
+  // Containers stack: three taps on Gorogoro is three gorogoro, the way the
+  // customer asked for it, with no kilo arithmetic in between.
+  const addUnit = (kg: number) => {
+    setActiveField('qty')
+    updateQty(String(roundQtyKg(qtyNum + kg)))
   }
 
   const handleKeypadKey = (key: string) => {
@@ -182,23 +248,56 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
 
   const handleAdd = () => {
     if (!selectedProduct) return
-    const qty = Number(qtyStr) || 0
-    if (qty <= 0 || qty > selectedProduct.totalWeightKg) return
+    const qty = roundQtyKg(Number(qtyStr) || 0)
+    if (qty <= 0 || qty > availableKg(selectedProduct)) return
 
     const line: CartLine = {
       productId: selectedProduct.id,
       name: selectedProduct.name,
       quantityKg: qty,
       unitPricePerKg: unitPrice,
-      subtotal: qty * unitPrice,
+      subtotal: lineSubtotal(qty, unitPrice),
     }
-    setTabs((prev) => prev.map((tab) => (tab.id === activeTabId ? { ...tab, items: mergeLine(tab.items, line) } : tab)))
+    // Merging into a line already in the cart can't exceed stock either.
+    const inCart = activeTab.items.find((item) => item.productId === selectedProduct.id)?.quantityKg ?? 0
+    if (inCart + qty > availableKg(selectedProduct) + 1e-9) {
+      showToast('error', `Only ${roundQtyKg(availableKg(selectedProduct) - inCart)} kg more of ${selectedProduct.name} in stock`)
+      return
+    }
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.id === activeTabId ? { ...tab, items: mergeLine(tab.items, line, selectedProduct) } : tab
+      )
+    )
     resetSelection()
+    // Back to the full catalogue for the next item, so the cashier never has to clear
+    // the search by hand between products.
+    setSearchQuery('')
+    setCategoryFilterId(null)
   }
 
   const removeItem = (index: number) => {
     setTabs((prev) =>
       prev.map((tab) => (tab.id === activeTabId ? { ...tab, items: tab.items.filter((_, i) => i !== index) } : tab))
+    )
+  }
+
+  // Whole-kilo +/- from the cart. Steps down to zero remove the line; the unit
+  // price is re-resolved so crossing the wholesale threshold either way retiers.
+  const adjustItemQty = (index: number, deltaKg: number) => {
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== activeTabId) return tab
+        const target = tab.items[index]
+        if (!target) return tab
+        const nextQty = roundQtyKg(target.quantityKg + deltaKg)
+        if (nextQty <= 0) return { ...tab, items: tab.items.filter((_, i) => i !== index) }
+        const product = snapshot.products.find((p) => p.id === target.productId)
+        const cappedQty = product ? Math.min(nextQty, availableKg(product)) : nextQty
+        if (cappedQty <= 0) return tab
+        const items = tab.items.map((item, i) => (i === index ? priceLine(item, cappedQty, product) : item))
+        return { ...tab, items }
+      })
     )
   }
 
@@ -212,29 +311,43 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
       return
     }
     setSubmittingSale(true)
+    const editOf = activeTab.editOf
+    const saleInput: SaleInput = {
+      shiftId: snapshot.activeShift.id,
+      customerName: payload.customerName,
+      customerPhone: payload.customerPhone || undefined,
+      items: activeTab.items.map((item) => ({
+        productId: item.productId,
+        quantityKg: item.quantityKg,
+        unitPricePerKg: item.unitPricePerKg,
+      })),
+      cashPaid: payload.cashPaid,
+      mpesaPaid: payload.mpesaPaid,
+      mpesaRef: payload.mpesaRef || undefined,
+      discount: payload.discount,
+      debtRepayment: payload.debtRepayment ?? undefined,
+    }
     try {
-      const sale = await window.electronAPI.recordSale({
-        shiftId: snapshot.activeShift.id,
-        customerName: payload.customerName,
-        customerPhone: payload.customerPhone || undefined,
-        items: activeTab.items.map((item) => ({
-          productId: item.productId,
-          quantityKg: item.quantityKg,
-          unitPricePerKg: item.unitPricePerKg,
-        })),
-        cashPaid: payload.cashPaid,
-        mpesaPaid: payload.mpesaPaid,
-        discount: payload.discount,
-      })
+      const sale = editOf
+        ? await window.electronAPI.editSale({ saleId: editOf.saleId, sale: saleInput })
+        : await window.electronAPI.recordSale(saleInput)
       const draft = await window.electronAPI.buildReceiptDraft(sale.id)
       setReceiptDraft(draft)
       setCheckoutOpen(false)
       if (snapshot.settings.auto_print_receipt === 'true') {
         window.electronAPI.printReceipt(draft).catch(() => undefined)
       }
-      setTabs((prev) => prev.map((tab) => (tab.id === activeTabId ? { ...tab, items: [] } : tab)))
+      setTabs((prev) =>
+        prev.map((tab) => (tab.id === activeTabId ? { ...tab, items: [], editOf: undefined } : tab))
+      )
       await onProductsChanged()
-      showToast('success', 'Sale recorded')
+      const doneLabel = editOf ? 'Sale updated' : 'Sale recorded'
+      showToast(
+        'success',
+        payload.debtRepayment
+          ? `${doneLabel} · KES ${payload.debtRepayment.amount.toLocaleString('en-KE')} taken off ${sale.customerName}'s debt`
+          : doneLabel
+      )
     } catch (error) {
       showToast('error', error instanceof Error ? error.message : 'Could not record sale')
     } finally {
@@ -272,7 +385,7 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
             }`}
           >
-            Sale {index + 1}
+            {tab.editOf ? `Edit ${formatReceiptNumber(tab.editOf.saleId)}` : `Sale ${index + 1}`}
             {tab.items.length > 0 && (
               <span
                 className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] tabular-nums ${
@@ -328,6 +441,7 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
           onQtyChange={updateQty}
           onAmountChange={updateAmount}
           onPreset={(kg) => updateQty(String(kg))}
+          onAddUnit={addUnit}
           onKeypadKey={handleKeypadKey}
           onAdd={handleAdd}
           onBack={resetSelection}
@@ -337,6 +451,7 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
           width={cartWidth}
           items={activeTab.items}
           onRemove={removeItem}
+          onAdjustQty={adjustItemQty}
           onCheckout={() => setCheckoutOpen(true)}
           onClear={clearCart}
         />
@@ -347,6 +462,8 @@ export function CurrentSalePage({ snapshot, isAdmin, onTabCountChange, onProduct
           subtotal={cartTotal}
           submitting={submittingSale}
           canApplyDiscount={canApplyDiscount}
+          initialCustomerName={activeTab.editOf?.customerName}
+          initialCustomerPhone={activeTab.editOf?.customerPhone}
           onConfirm={confirmCheckout}
           onClose={() => setCheckoutOpen(false)}
         />

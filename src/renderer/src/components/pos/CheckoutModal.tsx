@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CustomerBalance } from '../../../../shared/ipc'
+import type { CustomerBalance, PaymentMethod } from '../../../../shared/ipc'
+import { customerKey } from '../../../../shared/customers'
 import { formatThousands, toCurrency } from '../../../../shared/stock'
 import { CustomerAutocomplete } from '../CustomerAutocomplete'
 import { FormattedNumberInput } from '../FormattedNumberInput'
@@ -11,12 +12,17 @@ export interface CheckoutPayload {
   discount: number
   cashPaid: number
   mpesaPaid: number
+  mpesaRef: string
+  debtRepayment: { amount: number; paymentMethod: PaymentMethod } | null
 }
 
 interface CheckoutModalProps {
   subtotal: number
   submitting: boolean
   canApplyDiscount: boolean
+  /** Editing a recorded sale: the customer it was rung for, so it isn't typed in again. */
+  initialCustomerName?: string
+  initialCustomerPhone?: string
   onConfirm: (payload: CheckoutPayload) => void
   onClose: () => void
 }
@@ -45,13 +51,26 @@ function PaymentLabel({ text, fill, onFill }: { text: string; fill: number; onFi
   )
 }
 
-export function CheckoutModal({ subtotal, submitting, canApplyDiscount, onConfirm, onClose }: CheckoutModalProps) {
-  const [customerName, setCustomerName] = useState('Walk-in')
-  const [customerPhone, setCustomerPhone] = useState('')
+export function CheckoutModal({
+  subtotal,
+  submitting,
+  canApplyDiscount,
+  initialCustomerName = '',
+  initialCustomerPhone = '',
+  onConfirm,
+  onClose,
+}: CheckoutModalProps) {
+  // Empty, with "Walk-in" as the placeholder: a pre-filled "Walk-in" had to be
+  // deleted by hand before every named customer could be typed.
+  const [customerName, setCustomerName] = useState(initialCustomerName)
+  const [customerPhone, setCustomerPhone] = useState(initialCustomerPhone)
   const [discount, setDiscount] = useState('0')
   const [discountOpen, setDiscountOpen] = useState(false)
   const [cashPaid, setCashPaid] = useState('0')
   const [mpesaPaid, setMpesaPaid] = useState('0')
+  const [mpesaRef, setMpesaRef] = useState('')
+  const [repayAmount, setRepayAmount] = useState('0')
+  const [repayMethod, setRepayMethod] = useState<PaymentMethod>('CASH')
   const [knownCustomers, setKnownCustomers] = useState<CustomerBalance[]>([])
   const [phoneHint, setPhoneHint] = useState<'filled' | 'missing' | null>(null)
   const phoneInputRef = useRef<HTMLInputElement>(null)
@@ -65,7 +84,15 @@ export function CheckoutModal({ subtotal, submitting, canApplyDiscount, onConfir
   const balance = useMemo(() => total - paid, [total, paid])
   const isDebt = balance > 0
   const trimmedName = customerName.trim()
-  const debtNeedsName = isDebt && (!trimmedName || trimmedName.toLowerCase() === 'walk-in')
+  const debtNeedsName = isDebt && (!trimmedName || customerKey(trimmedName) === 'walk-in')
+
+  // A regular who owes from before can clear some of it on the same visit,
+  // instead of the cashier leaving the till for the Customers page.
+  const debtor = trimmedName
+    ? knownCustomers.find((c) => customerKey(c.customerName) === customerKey(trimmedName) && c.outstanding > 0)
+    : undefined
+  const repayNum = debtor ? Number(repayAmount) || 0 : 0
+  const repayTooMuch = debtor ? repayNum > debtor.outstanding : false
 
   // What is still owed. Almost always the whole bill, which is why the shortcut
   // is worth having; but if one method has already been part-entered, filling the
@@ -78,13 +105,15 @@ export function CheckoutModal({ subtotal, submitting, canApplyDiscount, onConfir
   }
 
   const submit = () => {
-    if (debtNeedsName) return
+    if (debtNeedsName || repayTooMuch) return
     onConfirm({
       customerName: trimmedName || 'Walk-in',
       customerPhone: customerPhone.trim(),
       discount: Number(discount) || 0,
       cashPaid: Number(cashPaid) || 0,
       mpesaPaid: Number(mpesaPaid) || 0,
+      mpesaRef: (Number(mpesaPaid) || 0) > 0 ? mpesaRef.trim() : '',
+      debtRepayment: repayNum > 0 ? { amount: repayNum, paymentMethod: repayMethod } : null,
     })
   }
 
@@ -120,7 +149,7 @@ export function CheckoutModal({ subtotal, submitting, canApplyDiscount, onConfir
             }
           }}
           candidates={knownCustomers}
-          placeholder="Search by name or phone…"
+          placeholder="Walk-in — or search by name / phone…"
           className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
         />
         {debtNeedsName && (
@@ -215,6 +244,67 @@ export function CheckoutModal({ subtotal, submitting, canApplyDiscount, onConfir
           </div>
         </div>
 
+        {(Number(mpesaPaid) || 0) > 0 && (
+          <>
+            <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              M-Pesa code <span className="normal-case font-normal text-slate-400">(optional)</span>
+            </label>
+            <input
+              value={mpesaRef}
+              onChange={(e) => setMpesaRef(e.target.value.toUpperCase().replace(/\s/g, ''))}
+              maxLength={12}
+              placeholder="e.g. SJK3H7QX2P"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase tracking-wide tabular-nums outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            />
+          </>
+        )}
+
+        {debtor && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                {debtor.customerName} owes {toCurrency(debtor.outstanding)} from before
+              </span>
+              <button
+                type="button"
+                onClick={() => setRepayAmount(String(debtor.outstanding))}
+                className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-amber-800 transition-all duration-150 hover:bg-amber-200 active:scale-95 dark:bg-amber-500/20 dark:text-amber-300"
+              >
+                Pay all {formatThousands(String(debtor.outstanding))}
+              </button>
+            </div>
+            <label className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Paying off old debt now
+            </label>
+            <div className="mt-1 flex gap-2">
+              <FormattedNumberInput
+                value={repayAmount}
+                onChange={setRepayAmount}
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+              {(['CASH', 'MPESA'] as PaymentMethod[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setRepayMethod(m)}
+                  className={`shrink-0 rounded-lg px-2.5 text-xs font-semibold transition-all duration-150 active:scale-[0.98] ${
+                    repayMethod === m
+                      ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/30'
+                      : 'bg-white text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                  }`}
+                >
+                  {m === 'CASH' ? 'Cash' : 'M-Pesa'}
+                </button>
+              ))}
+            </div>
+            {repayTooMuch && (
+              <p className="mt-1 text-xs font-medium text-red-500">
+                That&apos;s more than the {toCurrency(debtor.outstanding)} owed.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="mt-4 flex items-center justify-between text-sm">
           <span className="font-semibold text-slate-500 dark:text-slate-400">{balance > 0 ? 'Debt' : 'Change'}</span>
           <span className={`font-bold tabular-nums ${balance > 0 ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
@@ -224,11 +314,15 @@ export function CheckoutModal({ subtotal, submitting, canApplyDiscount, onConfir
 
         <button
           type="button"
-          disabled={submitting || debtNeedsName}
+          disabled={submitting || debtNeedsName || repayTooMuch}
           onClick={submit}
           className="mt-4 w-full rounded-xl bg-emerald-500 py-3 text-sm font-semibold tabular-nums text-white shadow-sm shadow-emerald-500/30 transition-all duration-150 hover:bg-emerald-600 active:scale-[0.98] disabled:opacity-50"
         >
-          {submitting ? 'Recording sale…' : `Confirm · ${toCurrency(total)}`}
+          {submitting
+            ? 'Recording sale…'
+            : repayNum > 0
+              ? `Confirm · ${toCurrency(total)} + ${toCurrency(repayNum)} debt`
+              : `Confirm · ${toCurrency(total)}`}
         </button>
       </div>
     </div>

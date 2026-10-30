@@ -10,19 +10,14 @@ interface RestockDrawerProps {
   productId: number
   products: ProductRecord[]
   shiftId: number
-  isAdmin: boolean
   onClose: () => void
   onSubmitted: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
 }
 
-export function RestockDrawer({ productId, products, shiftId, isAdmin, onClose, onSubmitted, showToast }: RestockDrawerProps) {
+export function RestockDrawer({ productId, products, shiftId, onClose, onSubmitted, showToast }: RestockDrawerProps) {
   const product = products.find((p) => p.id === productId) ?? null
-  const [line, setLine] = useState<RestockLineState>(() => ({
-    ...blankRestockLine(),
-    productId,
-    price: product ? String(product.buyingPricePerBag) : '',
-  }))
+  const [line, setLine] = useState<RestockLineState>(() => ({ ...blankRestockLine(), productId }))
   const [submitting, setSubmitting] = useState(false)
 
   const addedKg = product
@@ -41,7 +36,6 @@ export function RestockDrawer({ productId, products, shiftId, isAdmin, onClose, 
         shiftId,
         productId: product.id,
         addedKg,
-        newBuyingPricePerBag: isAdmin ? Number(line.price) || product.buyingPricePerBag : undefined,
         referenceNote: line.note.trim() || undefined,
       })
       showToast('success', `Restocked ${product.name}`)
@@ -69,7 +63,7 @@ export function RestockDrawer({ productId, products, shiftId, isAdmin, onClose, 
         </div>
 
         <div className="mt-4 flex-1">
-          <RestockLineItem products={products} isAdmin={isAdmin} locked value={line} onChange={setLine} />
+          <RestockLineItem products={products} locked value={line} onChange={setLine} />
         </div>
 
         <button

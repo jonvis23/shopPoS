@@ -53,6 +53,12 @@ export const PlusIcon = (props: IconProps) => (
   </svg>
 )
 
+export const MinusIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M5 12h14" />
+  </svg>
+)
+
 export const SearchIcon = (props: IconProps) => (
   <svg {...base(props)}>
     <circle cx="11" cy="11" r="8" />
@@ -206,5 +212,19 @@ export const MoreIcon = (props: IconProps) => (
 export const UploadIcon = (props: IconProps) => (
   <svg {...base(props)}>
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+  </svg>
+)
+
+export const EyeIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+)
+
+export const EyeOffIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-2.2 3.1M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20" />
   </svg>
 )

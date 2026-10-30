@@ -5,7 +5,7 @@ import type { ToastState } from '../components/Toast'
 import { CustomerAutocomplete } from '../components/CustomerAutocomplete'
 import { FormattedNumberInput } from '../components/FormattedNumberInput'
 import { PlusIcon, SearchIcon, XIcon } from '../components/Icons'
-import { toCurrency } from '../../../shared/stock'
+import { formatThousands, toCurrency } from '../../../shared/stock'
 import { formatDateTime } from '../../../shared/datetime'
 
 interface CustomersPageProps {
@@ -115,6 +115,9 @@ export function CustomersPage({ snapshot, showToast }: CustomersPageProps) {
   }
 
   const totalOutstanding = balances.reduce((sum, b) => sum + b.outstanding, 0)
+  // The window covers the row it was opened from, so it carries the figure itself.
+  const repayOwed = balances.find((b) => b.customerName === repayCustomer)?.outstanding ?? 0
+  const repayTooMuch = (Number(amount) || 0) > repayOwed
   const query = searchQuery.trim().toLowerCase()
   const visibleBalances = query
     ? balances.filter(
@@ -214,18 +217,43 @@ export function CustomersPage({ snapshot, showToast }: CustomersPageProps) {
           <form onSubmit={submitRepayment} className="w-full max-w-xs rounded-2xl border border-slate-200/60 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-900 dark:text-white">Repayment · {repayCustomer}</h3>
-              <button type="button" onClick={() => setRepayCustomer(null)} className="text-slate-400 hover:text-slate-600">
+              <button
+                type="button"
+                onClick={() => {
+                  setRepayCustomer(null)
+                  setAmount('0')
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
                 <XIcon width={18} height={18} />
               </button>
             </div>
 
-            <label className="mt-3 block text-xs font-semibold text-slate-500 dark:text-slate-400">Amount paid</label>
+            <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-800">
+              <span className="text-slate-500 dark:text-slate-400">Owes</span>
+              <span className="font-bold tabular-nums text-red-500">{toCurrency(repayOwed)}</span>
+            </div>
+
+            <div className="mt-3 flex items-baseline justify-between">
+              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400">Amount paid</label>
+              <button
+                type="button"
+                onClick={() => setAmount(String(repayOwed))}
+                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tabular-nums text-emerald-600 transition-all duration-150 hover:bg-emerald-100 active:scale-95 dark:bg-emerald-500/15 dark:text-emerald-400"
+              >
+                Pay all {formatThousands(String(repayOwed))}
+              </button>
+            </div>
             <FormattedNumberInput
               required
               value={amount}
               onChange={setAmount}
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
+
+            {repayTooMuch && (
+              <p className="mt-1 text-xs font-medium text-red-500">That&apos;s more than {repayCustomer} owes.</p>
+            )}
 
             <label className="mt-3 block text-xs font-semibold text-slate-500 dark:text-slate-400">Payment method</label>
             <div className="mt-1 grid grid-cols-2 gap-2">
@@ -247,7 +275,7 @@ export function CustomersPage({ snapshot, showToast }: CustomersPageProps) {
 
             <button
               type="submit"
-              disabled={submitting || !snapshot.activeShift}
+              disabled={submitting || !snapshot.activeShift || repayTooMuch || (Number(amount) || 0) <= 0}
               className="mt-4 w-full rounded-xl bg-emerald-500 py-2.5 text-sm font-semibold text-white shadow-sm shadow-emerald-500/30 transition-all duration-150 hover:bg-emerald-600 active:scale-[0.98] disabled:opacity-50"
             >
               {submitting ? 'Recording…' : 'Record payment'}

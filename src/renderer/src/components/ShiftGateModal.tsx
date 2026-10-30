@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import type { ShiftRecord } from '../../../shared/ipc'
 import { ClockIcon } from './Icons'
 import { formatDateTime } from '../../../shared/datetime'
 import { FormattedNumberInput } from './FormattedNumberInput'
@@ -17,6 +18,29 @@ export function ShiftGateModal({ busy, userName, onOpenShift, touchModeEnabled, 
   const [openingCash, setOpeningCash] = useState('0')
   const [openingMpesa, setOpeningMpesa] = useState('0')
   const [notes, setNotes] = useState('')
+  const [carriedFrom, setCarriedFrom] = useState<ShiftRecord | null>(null)
+  const touched = useRef(false)
+
+  // The float usually stays in the drawer overnight, so last close's counted
+  // figures are almost always today's opening ones. Prefilled, not assumed —
+  // the hint says where they came from so a float the owner took home gets fixed.
+  useEffect(() => {
+    window.electronAPI
+      .listRecentShifts(5)
+      .then((shifts) => {
+        const last = shifts.find((s) => s.status === 'CLOSED' && s.closingCashActual !== null)
+        if (!last || touched.current) return
+        setOpeningCash(String(last.closingCashActual ?? 0))
+        setOpeningMpesa(String(last.closingMpesaActual ?? 0))
+        setCarriedFrom(last)
+      })
+      .catch(() => undefined)
+  }, [])
+
+  const edit = (set: (value: string) => void) => (value: string) => {
+    touched.current = true
+    set(value)
+  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -55,7 +79,7 @@ export function ShiftGateModal({ busy, userName, onOpenShift, touchModeEnabled, 
             <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Opening cash</label>
             <FormattedNumberInput
               value={openingCash}
-              onChange={setOpeningCash}
+              onChange={edit(setOpeningCash)}
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
           </div>
@@ -63,11 +87,19 @@ export function ShiftGateModal({ busy, userName, onOpenShift, touchModeEnabled, 
             <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Opening M-Pesa</label>
             <FormattedNumberInput
               value={openingMpesa}
-              onChange={setOpeningMpesa}
+              onChange={edit(setOpeningMpesa)}
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm tabular-nums outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
           </div>
         </div>
+
+        {carriedFrom && (
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            Carried over from {carriedFrom.userName}&apos;s close
+            {carriedFrom.endTime ? `, ${formatDateTime(carriedFrom.endTime)}` : ''}. Change it if money was taken out
+            or added since.
+          </p>
+        )}
 
         <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           Notes <span className="normal-case font-normal text-slate-400">(optional)</span>

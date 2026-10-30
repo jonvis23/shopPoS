@@ -18,15 +18,20 @@ function esc(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
+// Thermal heads print grey as a faint dot pattern, so everything here is solid black:
+// weight and rules do the work that colour would otherwise do on screen.
 function itemRowHtml(item: SaleItemRecord, showDualUnit: boolean): string {
   const qtyLabel =
     showDualUnit && item.weightPerBag > 0
       ? `${Math.floor(item.quantityKg / item.weightPerBag)} bags ${(item.quantityKg % item.weightPerBag).toFixed(2)}kg`
       : `${item.quantityKg}kg`
   return `
-    <div class="row">
-      <span>${esc(item.productName)}<br /><span class="qty">x ${esc(qtyLabel)} @ ${esc(toCurrency(item.unitPricePerKg))}/kg</span></span>
-      <span class="amt">${esc(toCurrency(item.subtotal))}</span>
+    <div class="item">
+      <div>
+        <div class="item-name">${esc(item.productName)}</div>
+        <div class="item-qty">${esc(qtyLabel)} x ${esc(toCurrency(item.unitPricePerKg))}/kg</div>
+      </div>
+      <div class="amt item-amt">${esc(toCurrency(item.subtotal))}</div>
     </div>`
 }
 
@@ -43,23 +48,44 @@ export function buildReceiptHtml(draft: ReceiptDraft): string {
   html, body { margin: 0; padding: 0; }
   body {
     width: 80mm;
-    padding: 3mm 4mm 6mm;
+    /* The right margin is wider than the left: the print head drops the last few dots
+       of a line, which clipped the final digit of every amount on the right-hand column. */
+    padding: 3mm 7mm 6mm 4mm;
     font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 3.1mm;
-    line-height: 1.45;
+    font-size: 3.2mm;
+    line-height: 1.35;
     color: #000;
   }
   .center { text-align: center; }
-  .shop-name { font-size: 4.4mm; font-weight: 700; }
-  .muted { font-size: 2.6mm; color: #333; }
-  .rule { border-top: 0.35mm dashed #000; margin: 2mm 0; }
-  .row { display: flex; justify-content: space-between; gap: 3mm; margin: 1mm 0; }
-  .qty { font-size: 2.6mm; color: #333; }
+  .shop { font-size: 5mm; font-weight: 700; letter-spacing: 0.3mm; text-transform: uppercase; }
+  .tagline { font-size: 3mm; font-weight: 700; margin-top: 0.6mm; }
+  .note { font-size: 3mm; margin-top: 0.4mm; }
+  .meta { display: flex; justify-content: space-between; font-size: 2.9mm; margin-top: 1.2mm; }
+  .rule { border-top: 0.3mm dashed #000; margin: 2.2mm 0; }
+  .heavy { border-top: 0.7mm solid #000; margin: 2mm 0; }
+  .party { margin: 0.6mm 0; }
+  .label { font-weight: 700; }
+  .item { display: flex; justify-content: space-between; align-items: flex-start; gap: 3mm; margin: 1.8mm 0; }
+  .item-name { font-weight: 700; font-size: 3.4mm; }
+  .item-qty { font-size: 3mm; }
   .amt { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .total-row { display: flex; justify-content: space-between; font-size: 3.8mm; font-weight: 700; margin-top: 1mm; }
+  .item-amt { font-weight: 700; font-size: 3.4mm; }
+  .line { display: flex; justify-content: space-between; gap: 3mm; margin: 0.8mm 0; }
   .bold { font-weight: 700; }
+  .grand {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-top: 0.7mm solid #000;
+    border-bottom: 0.7mm solid #000;
+    padding: 1.6mm 0;
+    margin: 1.5mm 0;
+    font-size: 4.6mm;
+    font-weight: 700;
+  }
+  .footer { font-weight: 700; margin-top: 1mm; }
   .void-badge {
-    border: 0.3mm solid #000;
+    border: 0.5mm solid #000;
     text-align: center;
     padding: 1mm;
     font-weight: 700;
@@ -71,36 +97,39 @@ export function buildReceiptHtml(draft: ReceiptDraft): string {
 <body>
   ${sale.status === 'VOID' ? '<div class="void-badge">VOIDED</div>' : ''}
   <div class="center">
-    <div class="shop-name">${esc(draft.shopName)}</div>
-    ${draft.shopTagline ? `<div class="muted">${esc(draft.shopTagline)}</div>` : ''}
-    ${draft.headerNote ? `<div class="muted">${esc(draft.headerNote)}</div>` : ''}
-    <div class="muted">Receipt ${formatReceiptNumber(sale.id)}</div>
-    <div class="muted">${esc(formatDateTime(sale.createdAt))}</div>
+    <div class="shop">${esc(draft.shopName)}</div>
+    ${draft.shopTagline ? `<div class="tagline">${esc(draft.shopTagline)}</div>` : ''}
+    ${draft.headerNote ? `<div class="note">${esc(draft.headerNote)}</div>` : ''}
   </div>
-  <div class="rule"></div>
-  <div>Customer: ${esc(sale.customerName)}</div>
-  ${draft.showCashierName && draft.cashierName ? `<div>Cashier: ${esc(draft.cashierName)}</div>` : ''}
+  <div class="meta">
+    <span>Receipt ${formatReceiptNumber(sale.id)}</span>
+    <span>${esc(formatDateTime(sale.createdAt))}</span>
+  </div>
+  <div class="heavy"></div>
+  <div class="party"><span class="label">Customer:</span> ${esc(sale.customerName)}</div>
+  ${draft.showCashierName && draft.cashierName ? `<div class="party"><span class="label">Cashier:</span> ${esc(draft.cashierName)}</div>` : ''}
   <div class="rule"></div>
   ${sale.items.map((item) => itemRowHtml(item, draft.showDualUnit)).join('')}
   <div class="rule"></div>
   ${
     sale.discount > 0
-      ? `<div class="row"><span>Discount</span><span class="amt">-${esc(toCurrency(sale.discount))}</span></div>`
+      ? `<div class="line"><span>Discount</span><span class="amt">-${esc(toCurrency(sale.discount))}</span></div>`
       : ''
   }
-  <div class="total-row"><span>TOTAL</span><span class="amt">${esc(toCurrency(sale.totalAmount))}</span></div>
-  <div class="row muted">
+  <div class="grand"><span>TOTAL</span><span class="amt">${esc(toCurrency(sale.totalAmount))}</span></div>
+  <div class="line">
     <span>Cash / M-Pesa</span>
     <span class="amt">${esc(toCurrency(sale.cashPaid))} / ${esc(toCurrency(sale.mpesaPaid))}</span>
   </div>
+  ${sale.mpesaRef ? `<div class="line"><span>M-Pesa code</span><span class="amt">${esc(sale.mpesaRef)}</span></div>` : ''}
   ${
     changeDue(sale) > 0
-      ? `<div class="row bold"><span>CHANGE</span><span class="amt">${esc(toCurrency(changeDue(sale)))}</span></div>`
+      ? `<div class="line bold"><span>CHANGE</span><span class="amt">${esc(toCurrency(changeDue(sale)))}</span></div>`
       : ''
   }
   ${
     draft.showDebtBalance && sale.debtAmount > 0
-      ? `<div class="row bold"><span>Debt</span><span class="amt">${esc(toCurrency(sale.debtAmount))}</span></div>`
+      ? `<div class="line bold"><span>Debt</span><span class="amt">${esc(toCurrency(sale.debtAmount))}</span></div>`
       : ''
   }
   ${
@@ -111,7 +140,7 @@ export function buildReceiptHtml(draft: ReceiptDraft): string {
       : ''
   }
   <div class="rule"></div>
-  <div class="center muted">${esc(draft.footerNote)}</div>
+  <div class="center footer">${esc(draft.footerNote)}</div>
 </body>
 </html>`
 }

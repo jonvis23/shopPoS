@@ -8,7 +8,7 @@ import { ReceiptPreview } from '../../components/pos/ReceiptPreview'
 
 interface ReceiptTabProps {
   settings: Record<string, string>
-  isAdmin: boolean
+  canManageSettings: boolean
   onSettingsChanged: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
 }
@@ -25,7 +25,9 @@ const PREVIEW_SALE: SaleRecord = {
   totalAmount: 5000,
   cashPaid: 4000,
   mpesaPaid: 500,
+  mpesaRef: 'SJK3H7QX2P',
   debtAmount: 500,
+  debtOutstanding: 500,
   discount: 200,
   status: 'COMPLETED',
   voidReason: null,
@@ -63,7 +65,8 @@ const TOGGLE_FIELDS: Array<{ key: string; label: string; hint: string }> = [
   { key: 'receipt_show_debt_balance', label: 'Show customer debt balance', hint: 'When the sale left a balance owing.' },
 ]
 
-export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: ReceiptTabProps) {
+export function ReceiptTab({ settings, canManageSettings, onSettingsChanged, showToast }: ReceiptTabProps) {
+  const [tagline, setTagline] = useState(settings.shop_tagline ?? '')
   const [headerNote, setHeaderNote] = useState(settings.receipt_header_note ?? '')
   const [footerNote, setFooterNote] = useState(settings.receipt_footer ?? '')
   const [saving, setSaving] = useState(false)
@@ -72,6 +75,7 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
     event.preventDefault()
     setSaving(true)
     try {
+      await window.electronAPI.setSetting('shop_tagline', tagline)
       await window.electronAPI.setSetting('receipt_header_note', headerNote)
       await window.electronAPI.setSetting('receipt_footer', footerNote)
       await onSettingsChanged()
@@ -96,7 +100,7 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
     () => ({
       sale: PREVIEW_SALE,
       shopName: settings.shop_name || 'Your Shop Name',
-      shopTagline: settings.shop_tagline || '',
+      shopTagline: tagline,
       footerNote,
       headerNote,
       cashierName: 'Jane (Cashier)',
@@ -104,7 +108,7 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
       showCashierName: settings.receipt_show_cashier_name !== 'false',
       showDebtBalance: settings.receipt_show_debt_balance !== 'false',
     }),
-    [settings, headerNote, footerNote]
+    [settings, tagline, headerNote, footerNote]
   )
 
   return (
@@ -112,8 +116,16 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
       <div className="max-w-lg flex-1 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h3 className="text-sm font-bold tracking-tight text-slate-800 dark:text-slate-100">Receipt customization</h3>
 
-        {isAdmin ? (
+        {canManageSettings ? (
           <form onSubmit={saveText}>
+            <label className={fieldLabel}>Tagline</label>
+            <input
+              value={tagline}
+              onChange={(e) => setTagline(e.target.value)}
+              placeholder="e.g. Every bag counts"
+              className={fieldInput}
+            />
+
             <label className={fieldLabel}>Header note</label>
             <input value={headerNote} onChange={(e) => setHeaderNote(e.target.value)} className={fieldInput} />
 
@@ -136,6 +148,10 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
         ) : (
           <div className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between gap-4">
+              <span className="text-slate-400">Tagline</span>
+              <span className="font-medium text-slate-700 dark:text-slate-200">{tagline || '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4">
               <span className="text-slate-400">Header note</span>
               <span className="font-medium text-slate-700 dark:text-slate-200">{headerNote || '—'}</span>
             </div>
@@ -144,7 +160,7 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
               <span className="font-medium text-slate-700 dark:text-slate-200">{footerNote || '—'}</span>
             </div>
             <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
-              <LockIcon width={12} height={12} /> Sign in as Admin to edit these.
+              <LockIcon width={12} height={12} /> Ask an admin with the settings right to change these.
             </p>
           </div>
         )}
@@ -159,7 +175,7 @@ export function ReceiptTab({ settings, isAdmin, onSettingsChanged, showToast }: 
               <Toggle
                 checked={settings[field.key] !== 'false'}
                 onChange={(next) => toggleField(field.key, next)}
-                disabled={!isAdmin}
+                disabled={!canManageSettings}
               />
             </div>
           ))}

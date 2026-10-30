@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { SessionUser, UserRecord } from '../../../shared/ipc'
+import type { SessionUser, ShiftRecord, UserRecord } from '../../../shared/ipc'
 import type { ToastState } from './Toast'
 import { LockIcon, UserIcon } from './Icons'
 import { Logo } from './Logo'
 import { MarketBackdrop } from './MarketBackdrop'
 import { TouchModeToggle } from './TouchModeToggle'
+import { ADMIN_RIGHTS, hasRight } from '../../../shared/rights'
 
 export type Session = SessionUser
 
 interface LoginScreenProps {
   onLogin: (session: Session) => void
   showToast: (kind: ToastState['kind'], message: string) => void
+  /** The shift left open on this till, if any. Its owner signs in as normal; anyone
+   * else needs an Admin's PIN and a reason. */
+  openShift: ShiftRecord | null
   touchModeEnabled: boolean
   onTouchModeChanged: () => Promise<void> | void
 }
@@ -20,15 +24,22 @@ type Step = 'loading' | 'select-user' | 'pin' | 'first-run-admin-setup'
 
 const PIN_LENGTH = 4
 
-export function LoginScreen({ onLogin, showToast, touchModeEnabled, onTouchModeChanged }: LoginScreenProps) {
+export function LoginScreen({ onLogin, showToast, openShift, touchModeEnabled, onTouchModeChanged }: LoginScreenProps) {
   const [step, setStep] = useState<Step>('loading')
   const [users, setUsers] = useState<UserRecord[]>([])
   const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null)
   const [pin, setPin] = useState('')
   const [name, setName] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
+  const [overrideAdminId, setOverrideAdminId] = useState<number | null>(null)
+  const [overrideAdminPin, setOverrideAdminPin] = useState('')
+  const [overrideReason, setOverrideReason] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  const admins = users.filter((u) => u.isActive && hasRight(u, 'manage_staff'))
+  const overrideNeeded =
+    !!openShift && openShift.userId !== null && selectedUser !== null && selectedUser.id !== openShift.userId
 
   const loadUsers = () => {
     window.electronAPI
@@ -56,6 +67,9 @@ export function LoginScreen({ onLogin, showToast, touchModeEnabled, onTouchModeC
     setPin('')
     setName('')
     setConfirmPin('')
+    setOverrideAdminId(null)
+    setOverrideAdminPin('')
+    setOverrideReason('')
     setError('')
     setStep('select-user')
   }
@@ -67,10 +81,21 @@ export function LoginScreen({ onLogin, showToast, touchModeEnabled, onTouchModeC
       setError(`PIN must be ${PIN_LENGTH} digits`)
       return
     }
+    if (overrideNeeded && (overrideAdminId === null || overrideAdminPin.length !== PIN_LENGTH || !overrideReason.trim())) {
+      setError('Pick an Admin, enter their PIN and write why you are signing in to this shift')
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      const session = await window.electronAPI.login({ userId: selectedUser.id, pin })
+      const override = overrideNeeded
+        ? {
+            adminUserId: overrideAdminId as number,
+            adminPin: overrideAdminPin,
+            reason: overrideReason.trim(),
+          }
+        : undefined
+      const session = await window.electronAPI.login({ userId: selectedUser.id, pin, override })
       onLogin(session)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Incorrect PIN')
@@ -97,7 +122,7 @@ export function LoginScreen({ onLogin, showToast, touchModeEnabled, onTouchModeC
     setBusy(true)
     setError('')
     try {
-      const user = await window.electronAPI.createUser({ name: name.trim(), role: 'ADMIN', pin })
+      const user = await window.electronAPI.createUser({ name: name.trim(), rights: [...ADMIN_RIGHTS], pin })
       const session = await window.electronAPI.login({ userId: user.id, pin })
       onLogin(session)
     } catch (err) {
@@ -124,6 +149,12 @@ export function LoginScreen({ onLogin, showToast, touchModeEnabled, onTouchModeC
 
         {step === 'select-user' && (
           <div className="mt-6">
+            {openShift && (
+              <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+                A shift is open on this till{openShift.userId !== null ? ` with ${openShift.userName}` : ''}. It can only
+                be signed in to by the person who opened it, or with an Admin's PIN.
+              </p>
+            )}
             <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Who's working the till?
             </label>
@@ -152,6 +183,42 @@ export function LoginScreen({ onLogin, showToast, touchModeEnabled, onTouchModeC
 
         {step === 'pin' && selectedUser && (
           <form onSubmit={submitPin} className="mt-6">
+            {overrideNeeded && (
+              <div className="mb-4 rounded-lg border border-amber-200 p-3 dark:border-amber-500/30">
+                <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Admin override</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {admins.map((admin) => (
+                    <button
+                      key={admin.id}
+                      type="button"
+                      onClick={() => setOverrideAdminId(admin.id)}
+                      className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                        overrideAdminId === admin.id
+                          ? 'border-emerald-400 bg-emerald-50 text-emerald-700 dark:border-emerald-500/50 dark:bg-emerald-500/10 dark:text-emerald-300'
+                          : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {admin.name}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={PIN_LENGTH}
+                  placeholder="Admin PIN"
+                  value={overrideAdminPin}
+                  onChange={(e) => setOverrideAdminPin(e.target.value.replace(/\D/g, ''))}
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-center text-sm tracking-[0.5em] outline-none focus:border-emerald-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+                <input
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="Why are you taking this shift?"
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+              </div>
+            )}
             <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Enter PIN for {selectedUser.name}
             </label>

@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { DashboardSnapshot } from '../../shared/ipc'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { DashboardSnapshot, SaleRecord } from '../../shared/ipc'
+import { hasRight } from '../../shared/rights'
+import type { AdminRight } from '../../shared/rights'
 import { TopNav } from './components/TopNav'
 import type { ViewKey } from './components/TopNav'
 import { ShiftGateModal } from './components/ShiftGateModal'
 import { LoginScreen } from './components/LoginScreen'
 import type { Session } from './components/LoginScreen'
+import { LockScreen } from './components/LockScreen'
+import { ExitGateModal } from './components/ExitGateModal'
 import { Toast } from './components/Toast'
 import type { ToastState } from './components/Toast'
 import { CurrentSalePage } from './pages/CurrentSalePage'
@@ -16,6 +20,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { SplashScreen } from './components/SplashScreen'
 import { OnScreenKeyboard } from './components/OnScreenKeyboard'
 import { PracticeModeBanner } from './components/PracticeModeBanner'
+import { WHATS_NEW_STEPS, WHATS_NEW_VERSION, Walkthrough } from './components/Walkthrough'
 
 const THEME_KEY = 'duka-pos-theme'
 // Which light theme the sun/moon button in the top bar returns to. Without this,
@@ -45,7 +50,9 @@ function App() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<Session | null>(null)
+  const [locked, setLocked] = useState(false)
   const [activeView, setActiveView] = useState<ViewKey>('current')
+  const [saleToEdit, setSaleToEdit] = useState<SaleRecord | null>(null)
   const [dark, setDark] = useState(() => localStorage.getItem(THEME_KEY) === 'dark')
   const [toast, setToast] = useState<ToastState | null>(null)
   const [shiftBusy, setShiftBusy] = useState(false)
@@ -53,6 +60,9 @@ function App() {
   const [now, setNow] = useState(() => new Date())
   const [practiceMode, setPracticeMode] = useState(false)
   const [practiceBusy, setPracticeBusy] = useState(false)
+  const [exitRequested, setExitRequested] = useState(false)
+  const [tourOpen, setTourOpen] = useState(false)
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false)
 
   const themeMode = snapshot?.settings.theme_mode ?? 'SYSTEM'
 
@@ -102,7 +112,7 @@ function App() {
     setToast({ kind, message: cleanErrorMessage(message) })
   }, [])
 
-  const isAdmin = session?.role === 'ADMIN'
+  const can = (right: AdminRight) => hasRight(session, right)
 
   const loadSnapshot = useCallback(async () => {
     try {
@@ -125,6 +135,23 @@ function App() {
       .then((status) => setPracticeMode(status.active))
       .catch(() => undefined)
   }, [])
+
+  // Main refuses to close the window over an open shift and tells us instead.
+  useEffect(() => window.electronAPI.onExitBlocked(() => setExitRequested(true)), [])
+
+  // Stock added while the owner was away waits for them. Their first look is on sign-in.
+  useEffect(() => {
+    if (!session || !hasRight(session, 'manage_stock')) return
+    window.electronAPI
+      .getStockAttention()
+      .then((attention) => {
+        const count = attention.pendingReceipts.length + attention.unreviewedTakeHome.length
+        if (count > 0) {
+          showToast('info', `${count} stock item${count === 1 ? '' : 's'} need your attention. See Inventory`)
+        }
+      })
+      .catch(() => undefined)
+  }, [session, showToast])
 
   // Switching modes repoints the main process at a different database file, so
   // everything the renderer is holding — snapshot, open carts, the view you were
@@ -155,6 +182,17 @@ function App() {
     },
     [loadSnapshot, showToast]
   )
+
+  // Dev builds only (`npm run dev`): the first sign-in of each launch that can change
+  // settings starts practice mode, so new features are tried on generated trading. The
+  // practice file is rebuilt on every launch anyway, and the installed till never does this.
+  const autoPracticeTried = useRef(false)
+  useEffect(() => {
+    if (!import.meta.env.DEV || autoPracticeTried.current) return
+    if (!session || practiceMode || !hasRight(session, 'manage_settings')) return
+    autoPracticeTried.current = true
+    switchPracticeMode(true)
+  }, [session, practiceMode, switchPracticeMode])
 
   const refreshProducts = useCallback(async () => {
     const products = await window.electronAPI.listProducts()
@@ -203,11 +241,56 @@ function App() {
     }
   }
 
+  // Opens the tour the first time someone reaches the till after a shift is open,
+  // so it never sits on top of the login or the open-shift form. Once it is closed
+  // by any route, the flag is saved and it stays closed until the ? button is pressed.
+  const tourSeen = snapshot?.settings.welcome_tour_done === 'true'
+  const tourReady = !!session && !!snapshot?.activeShift && !locked
+  // What's new waits for the welcome tour, and a new shop never sees it: the welcome tour
+  // already covers the same steps.
+  const whatsNewSeen = snapshot?.settings.whats_new_seen === WHATS_NEW_VERSION
+  useEffect(() => {
+    if (tourReady && !tourSeen) setTourOpen(true)
+    else if (tourReady && tourSeen && !whatsNewSeen) setWhatsNewOpen(true)
+  }, [tourReady, tourSeen, whatsNewSeen])
+
+  const closeWhatsNew = async () => {
+    setWhatsNewOpen(false)
+    try {
+      await window.electronAPI.setSetting('whats_new_seen', WHATS_NEW_VERSION)
+      await refreshSettings()
+    } catch {
+      // Not saved means it shows once more next time, which is harmless.
+    }
+  }
+
+  const closeTour = async () => {
+    setTourOpen(false)
+    try {
+      await window.electronAPI.setSetting('welcome_tour_done', 'true')
+      await window.electronAPI.setSetting('whats_new_seen', WHATS_NEW_VERSION)
+      await refreshSettings()
+    } catch {
+      // If the save fails the tour simply shows again next time, which is harmless.
+    }
+  }
+
   if (loading || !snapshot) {
     return <SplashScreen />
   }
 
   const onScreenKeyboardEnabled = snapshot.settings.onscreen_keyboard_enabled !== 'false'
+
+  // Shown in both the login and the till so a close attempt is never silently ignored.
+  const exitGate =
+    exitRequested && snapshot.activeShift ? (
+      <ExitGateModal
+        shift={snapshot.activeShift}
+        session={session}
+        onCancel={() => setExitRequested(false)}
+        showToast={showToast}
+      />
+    ) : null
 
   if (!session) {
     return (
@@ -215,12 +298,33 @@ function App() {
         <LoginScreen
           onLogin={setSession}
           showToast={showToast}
+          openShift={snapshot.activeShift}
           touchModeEnabled={onScreenKeyboardEnabled}
           onTouchModeChanged={refreshSettings}
         />
+        {exitGate}
         <OnScreenKeyboard enabled={onScreenKeyboardEnabled} />
       </>
     )
+  }
+
+  // Main refuses to sign out while a shift is open, so the session is only dropped
+  // once main has agreed. Otherwise the till would show the login screen while main
+  // still trusts the previous person.
+  const endSession = () => {
+    setLocked(false)
+    setSession(null)
+    setActiveView('current')
+  }
+
+  const logOut = async () => {
+    try {
+      await window.electronAPI.logout()
+    } catch (error) {
+      showToast('error', error instanceof Error ? error.message : 'Could not log out')
+      return
+    }
+    endSession()
   }
 
   return (
@@ -233,15 +337,16 @@ function App() {
         onChangeView={setActiveView}
         dark={dark}
         onToggleDark={toggleDark}
+        session={session}
         activeShift={snapshot.activeShift}
         saleTabCount={saleTabCount}
         now={now}
         showToast={showToast}
         onShiftClosed={refreshShift}
-        onLogout={() => {
-          setSession(null)
-          setActiveView('current')
-        }}
+        onLock={() => setLocked(true)}
+        onLogout={logOut}
+        onSessionEnded={endSession}
+        onShowHelp={() => setTourOpen(true)}
       />
 
       <main className="flex-1 overflow-hidden">
@@ -263,31 +368,41 @@ function App() {
               <CurrentSalePage
                 key={practiceMode ? 'practice' : 'real'}
                 snapshot={snapshot}
-                isAdmin={isAdmin}
+                canApproveDiscounts={can('approve_discounts_voids')}
                 onTabCountChange={setSaleTabCount}
                 onProductsChanged={refreshProducts}
                 showToast={showToast}
+                saleToEdit={saleToEdit}
+                onSaleToEditLoaded={() => setSaleToEdit(null)}
               />
             </div>
             {activeView === 'transactions' && (
               <TransactionsPage
                 snapshot={snapshot}
-                isAdmin={isAdmin}
+                canViewReports={can('view_reports')}
+                canApproveVoids={can('approve_discounts_voids')}
                 onProductsChanged={refreshProducts}
                 showToast={showToast}
+                onEditSale={(sale) => {
+                  setSaleToEdit(sale)
+                  setActiveView('current')
+                }}
               />
             )}
             {activeView === 'inventory' && (
               <InventoryPage
                 snapshot={snapshot}
-                isAdmin={isAdmin}
+                canManageProducts={can('manage_products')}
+                canManageStock={can('manage_stock')}
                 onProductsChanged={refreshProducts}
                 onCategoriesChanged={refreshCategories}
                 showToast={showToast}
               />
             )}
             {activeView === 'customers' && <CustomersPage snapshot={snapshot} showToast={showToast} />}
-            {activeView === 'analytics' && <AnalyticsPage isAdmin={isAdmin} />}
+            {activeView === 'analytics' && (
+              <AnalyticsPage canViewReports={can('view_reports')} onNavigate={setActiveView} />
+            )}
             {activeView === 'settings' && (
               <SettingsPage
                 snapshot={snapshot}
@@ -312,6 +427,24 @@ function App() {
           onTouchModeChanged={refreshSettings}
         />
       )}
+      {locked && (
+        <LockScreen
+          session={session}
+          onUnlock={() => setLocked(false)}
+          onSwitchUser={logOut}
+          canSwitchUser={!snapshot.activeShift}
+        />
+      )}
+      {tourOpen && session && !locked && <Walkthrough onClose={closeTour} onChangeView={setActiveView} />}
+      {whatsNewOpen && !tourOpen && session && !locked && (
+        <Walkthrough
+          steps={WHATS_NEW_STEPS}
+          label="What's new in Duka POS"
+          onClose={closeWhatsNew}
+          onChangeView={setActiveView}
+        />
+      )}
+      {exitGate}
       <OnScreenKeyboard enabled={onScreenKeyboardEnabled} />
       <Toast toast={toast} />
     </div>

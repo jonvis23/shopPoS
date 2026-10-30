@@ -1,6 +1,6 @@
 import type { CategoryRecord, ProductRecord } from '../../../../shared/ipc'
 import type { StockSummary } from '../../../../shared/stock'
-import { SearchIcon } from '../Icons'
+import { SearchIcon, XIcon } from '../Icons'
 
 export interface StockRow {
   product: ProductRecord
@@ -30,9 +30,12 @@ export function StockGrid({
   onSelectProduct,
 }: StockGridProps) {
   const query = searchQuery.trim().toLowerCase()
+  // A search reaches across every category, so the category pills stop claiming the
+  // view while one is typed — the same rule as the sell screen.
+  const searching = query !== ''
   const visible = rows.filter(({ product }) => {
-    if (categoryFilterId !== null && product.categoryId !== categoryFilterId) return false
-    if (query && !product.name.toLowerCase().includes(query)) return false
+    if (!searching && categoryFilterId !== null && product.categoryId !== categoryFilterId) return false
+    if (searching && !product.name.toLowerCase().includes(query)) return false
     return true
   })
 
@@ -44,8 +47,22 @@ export function StockGrid({
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Search stock…"
-          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-9 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
         />
+        {searchQuery !== '' && (
+          <button
+            type="button"
+            onClick={() => {
+              onSearchChange('')
+              onCategoryChange(null)
+            }}
+            aria-label="Clear search"
+            title="Clear search and show all products"
+            className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          >
+            <XIcon width={14} height={14} />
+          </button>
+        )}
       </div>
 
       <div className="mt-2.5 flex max-h-[68px] flex-wrap gap-1.5 overflow-y-auto">
@@ -53,7 +70,7 @@ export function StockGrid({
           type="button"
           onClick={() => onCategoryChange(null)}
           className={`rounded-full px-3 py-1 text-xs font-medium transition-all duration-150 active:scale-95 ${
-            categoryFilterId === null
+            !searching && categoryFilterId === null
               ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/30'
               : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
           }`}
@@ -66,7 +83,7 @@ export function StockGrid({
             type="button"
             onClick={() => onCategoryChange(category.id)}
             className={`rounded-full px-3 py-1 text-xs font-medium transition-all duration-150 active:scale-95 ${
-              categoryFilterId === category.id
+              !searching && categoryFilterId === category.id
                 ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/30'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
             }`}

@@ -9,7 +9,12 @@ interface TransactionDetailModalProps {
   sale: SaleRecord
   onClose: () => void
   showToast: (kind: ToastState['kind'], message: string) => void
+  /** Only passed for an admin on a completed sale from the open shift. */
+  onEdit?: () => void
 }
+
+// Half a cent is floating-point residue from repayments, not money still owed.
+const DEBT_EPSILON = 0.005
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -20,7 +25,7 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-export function TransactionDetailModal({ sale, onClose, showToast }: TransactionDetailModalProps) {
+export function TransactionDetailModal({ sale, onClose, showToast, onEdit }: TransactionDetailModalProps) {
   const [printing, setPrinting] = useState(false)
 
   const handlePrint = async () => {
@@ -121,6 +126,7 @@ export function TransactionDetailModal({ sale, onClose, showToast }: Transaction
             <div className="my-1.5 border-t border-slate-100 dark:border-slate-800" />
             <Row label="Cash paid" value={toCurrency(sale.cashPaid)} />
             <Row label="M-Pesa paid" value={toCurrency(sale.mpesaPaid)} />
+            {sale.mpesaRef && <Row label="M-Pesa code" value={sale.mpesaRef} />}
             {change > 0 && (
               <div className="flex items-center justify-between py-1 text-sm">
                 <span className="font-semibold text-slate-600 dark:text-slate-300">Change given</span>
@@ -133,18 +139,43 @@ export function TransactionDetailModal({ sale, onClose, showToast }: Transaction
                 <span className="font-semibold tabular-nums text-red-500">{toCurrency(sale.debtAmount)}</span>
               </div>
             )}
+            {sale.debtAmount > 0 && sale.status !== 'VOID' && (
+              <div className="flex items-center justify-between py-1 text-sm">
+                <span className="text-slate-500 dark:text-slate-400">
+                  {sale.debtOutstanding > DEBT_EPSILON ? 'Balance left' : 'Status'}
+                </span>
+                <span
+                  className={`font-semibold tabular-nums ${
+                    sale.debtOutstanding > DEBT_EPSILON ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                >
+                  {sale.debtOutstanding > DEBT_EPSILON ? toCurrency(sale.debtOutstanding) : 'Paid off'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handlePrint}
-          disabled={printing}
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-2.5 text-sm font-semibold text-white shadow-sm shadow-emerald-500/30 transition-all duration-150 hover:bg-emerald-600 active:scale-[0.98] disabled:opacity-50"
-        >
-          <PrinterIcon width={16} height={16} />
-          {printing ? 'Printing…' : 'Print receipt'}
-        </button>
+        <div className="mt-4 flex gap-2">
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="flex-1 rounded-xl border border-emerald-500 py-2.5 text-sm font-semibold text-emerald-600 transition-all duration-150 hover:bg-emerald-50 active:scale-[0.98] dark:text-emerald-400 dark:hover:bg-emerald-500/10"
+            >
+              Edit sale
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={printing}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 py-2.5 text-sm font-semibold text-white shadow-sm shadow-emerald-500/30 transition-all duration-150 hover:bg-emerald-600 active:scale-[0.98] disabled:opacity-50"
+          >
+            <PrinterIcon width={16} height={16} />
+            {printing ? 'Printing…' : 'Print receipt'}
+          </button>
+        </div>
       </div>
     </div>
   )

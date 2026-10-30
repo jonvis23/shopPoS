@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { UserRecord } from '../../../../shared/ipc'
+import { ADMIN_RIGHTS, ADMIN_RIGHT_INFO } from '../../../../shared/rights'
+import type { AdminRight } from '../../../../shared/rights'
 import type { ToastState } from '../Toast'
 import { CheckIcon, XIcon } from '../Icons'
 
@@ -15,12 +17,22 @@ const fieldLabel = 'mt-3 block text-xs font-semibold text-slate-500 dark:text-sl
 const fieldInput =
   'mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
 
-function AdminRightsChecklistItem({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
+function RightCheckbox({
+  right,
+  checked,
+  onToggle,
+}: {
+  right: AdminRight
+  checked: boolean
+  onToggle: () => void
+}) {
+  const info = ADMIN_RIGHT_INFO[right]
   return (
     <button
       type="button"
       onClick={onToggle}
-      className={`mt-1 flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-all duration-150 ${
+      aria-pressed={checked}
+      className={`flex w-full items-start gap-3 rounded-xl border p-2.5 text-left transition-all duration-150 ${
         checked
           ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10'
           : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800'
@@ -34,10 +46,8 @@ function AdminRightsChecklistItem({ checked, onToggle }: { checked: boolean; onT
         {checked && <CheckIcon width={12} height={12} />}
       </span>
       <span>
-        <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Grant full Admin access</div>
-        <div className="text-xs text-slate-400">
-          Settings, staff accounts, pricing, and all permission overrides. Leave unchecked for a Cashier account.
-        </div>
+        <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{info.label}</div>
+        <div className="text-xs text-slate-400">{info.hint}</div>
       </span>
     </button>
   )
@@ -49,10 +59,13 @@ export function UserFormModal({ user, onClose, onSaved, showToast }: UserFormMod
   const isEdit = user !== null
   const [step, setStep] = useState<Step>('details')
   const [name, setName] = useState(user?.name ?? '')
-  const [isAdmin, setIsAdmin] = useState(user?.role === 'ADMIN')
+  const [rights, setRights] = useState<AdminRight[]>(user?.rights ?? [])
   const [pin, setPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const toggleRight = (right: AdminRight) =>
+    setRights((current) => (current.includes(right) ? current.filter((r) => r !== right) : [...current, right]))
 
   const validateDetails = (): boolean => {
     if (!name.trim()) {
@@ -82,11 +95,10 @@ export function UserFormModal({ user, onClose, onSaved, showToast }: UserFormMod
     if (!validateDetails()) return
     setSaving(true)
     try {
-      const role = isAdmin ? 'ADMIN' : 'CASHIER'
       if (isEdit) {
-        await window.electronAPI.updateUser(user.id, { name: name.trim(), role })
+        await window.electronAPI.updateUser(user.id, { name: name.trim(), rights })
       } else {
-        await window.electronAPI.createUser({ name: name.trim(), role, pin })
+        await window.electronAPI.createUser({ name: name.trim(), rights, pin })
       }
       await onSaved()
       onClose()
@@ -103,11 +115,11 @@ export function UserFormModal({ user, onClose, onSaved, showToast }: UserFormMod
     <div className="osk-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
       <form
         onSubmit={isEdit ? submit : step === 'details' ? goToRights : submit}
-        className="w-full max-w-sm rounded-2xl border border-slate-200/60 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
+        className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl border border-slate-200/60 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
       >
         <div className="flex items-center justify-between">
           <h3 className="text-base font-bold tracking-tight text-slate-900 dark:text-white">
-            {isEdit ? 'Edit staff account' : step === 'details' ? 'Add staff account' : 'Set access rights'}
+            {isEdit ? 'Edit staff account' : step === 'details' ? 'Add staff account' : 'What can they do?'}
           </h3>
           <button type="button" onClick={onClose} className="text-slate-400 transition-colors hover:text-slate-600">
             <XIcon width={18} height={18} />
@@ -118,46 +130,79 @@ export function UserFormModal({ user, onClose, onSaved, showToast }: UserFormMod
           <div className="mt-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
             <span className={step === 'details' ? 'text-emerald-600 dark:text-emerald-400' : ''}>1. Details</span>
             <span>→</span>
-            <span className={step === 'rights' ? 'text-emerald-600 dark:text-emerald-400' : ''}>2. Access rights</span>
+            <span className={step === 'rights' ? 'text-emerald-600 dark:text-emerald-400' : ''}>2. Rights</span>
           </div>
         )}
 
-        {(isEdit || step === 'details') && (
-          <>
-            <label className={fieldLabel}>Name</label>
-            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} className={fieldInput} />
+        <div className="mt-1 min-h-0 flex-1 overflow-y-auto pr-1">
+          {(isEdit || step === 'details') && (
+            <>
+              <label className={fieldLabel}>Name</label>
+              <input autoFocus value={name} onChange={(e) => setName(e.target.value)} className={fieldInput} />
 
-            {!isEdit && (
-              <>
-                <label className={fieldLabel}>PIN (4 digits)</label>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={4}
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-                  className={`${fieldInput} text-center tracking-[0.5em]`}
-                />
-                <label className={fieldLabel}>Confirm PIN</label>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={4}
-                  value={confirmPin}
-                  onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
-                  className={`${fieldInput} text-center tracking-[0.5em]`}
-                />
-              </>
-            )}
-          </>
-        )}
+              {!isEdit && (
+                <>
+                  <label className={fieldLabel}>PIN (4 digits)</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                    className={`${fieldInput} text-center tracking-[0.5em]`}
+                  />
+                  <label className={fieldLabel}>Confirm PIN</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={confirmPin}
+                    onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
+                    className={`${fieldInput} text-center tracking-[0.5em]`}
+                  />
+                </>
+              )}
+            </>
+          )}
 
-        {showRightsStep && (
-          <>
-            <label className={fieldLabel}>Access rights</label>
-            <AdminRightsChecklistItem checked={isAdmin} onToggle={() => setIsAdmin((v) => !v)} />
-          </>
-        )}
+          {showRightsStep && (
+            <>
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-xs text-slate-400">
+                  {rights.length === 0
+                    ? 'Cashier: sells and logs day-to-day expenses only.'
+                    : `${rights.length} of ${ADMIN_RIGHTS.length} ticked`}
+                </span>
+                <span className="flex gap-3 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setRights([...ADMIN_RIGHTS])}
+                    className="text-emerald-600 hover:underline"
+                  >
+                    Tick all
+                  </button>
+                  <button type="button" onClick={() => setRights([])} className="text-slate-400 hover:underline">
+                    Clear
+                  </button>
+                </span>
+              </div>
+              <div className="mt-2 flex flex-col gap-2">
+                {ADMIN_RIGHTS.map((right) => (
+                  <RightCheckbox
+                    key={right}
+                    right={right}
+                    checked={rights.includes(right)}
+                    onToggle={() => toggleRight(right)}
+                  />
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-slate-400">
+                Rights are set when someone signs in. If they are on the till now, the change applies the next time they
+                sign in.
+              </p>
+            </>
+          )}
+        </div>
 
         {!isEdit && step === 'rights' ? (
           <div className="mt-5 flex gap-2">

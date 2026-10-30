@@ -9,7 +9,6 @@ import type { RestockLineState } from './RestockLineItem'
 interface AddStockModalProps {
   products: ProductRecord[]
   shiftId: number
-  isAdmin: boolean
   onClose: () => void
   onSubmitted: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
@@ -21,7 +20,7 @@ function computeAddedKg(line: RestockLineState, products: ProductRecord[]): numb
   return line.unitMode === 'BAGS' ? (Number(line.quantity) || 0) * product.weightPerBag : Number(line.quantity) || 0
 }
 
-export function AddStockModal({ products, shiftId, isAdmin, onClose, onSubmitted, showToast }: AddStockModalProps) {
+export function AddStockModal({ products, shiftId, onClose, onSubmitted, showToast }: AddStockModalProps) {
   const [lines, setLines] = useState<RestockLineState[]>([blankRestockLine()])
   const [submitting, setSubmitting] = useState(false)
 
@@ -48,7 +47,6 @@ export function AddStockModal({ products, shiftId, isAdmin, onClose, onSubmitted
           shiftId,
           productId: product.id,
           addedKg: computeAddedKg(line, products),
-          newBuyingPricePerBag: isAdmin ? Number(line.price) || product.buyingPricePerBag : undefined,
           referenceNote: line.note.trim() || undefined,
         })
       }
@@ -85,7 +83,6 @@ export function AddStockModal({ products, shiftId, isAdmin, onClose, onSubmitted
             <RestockLineItem
               key={index}
               products={products}
-              isAdmin={isAdmin}
               dense
               value={line}
               onChange={(next) => updateLine(index, next)}

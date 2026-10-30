@@ -1,24 +1,22 @@
 import type { ProductRecord } from '../../../../shared/ipc'
-import { formatThousands, summarizeStock, toCurrency } from '../../../../shared/stock'
+import { formatThousands, summarizeStock } from '../../../../shared/stock'
 import { FormattedNumberInput } from '../FormattedNumberInput'
-import { LockIcon, XIcon } from '../Icons'
+import { XIcon } from '../Icons'
 import { ProductPicker } from './ProductPicker'
 
 export interface RestockLineState {
   productId: number | null
   unitMode: 'BAGS' | 'KG'
   quantity: string
-  price: string
   note: string
 }
 
 export function blankRestockLine(): RestockLineState {
-  return { productId: null, unitMode: 'BAGS', quantity: '', price: '', note: '' }
+  return { productId: null, unitMode: 'BAGS', quantity: '', note: '' }
 }
 
 interface RestockLineItemProps {
   products: ProductRecord[]
-  isAdmin: boolean
   locked?: boolean
   /** One row per delivery line instead of a stacked form — for the wide Add stock modal. */
   dense?: boolean
@@ -37,7 +35,9 @@ function pillClass(active: boolean): string {
   }`
 }
 
-export function RestockLineItem({ products, isAdmin, locked, dense, value, onChange, onRemove }: RestockLineItemProps) {
+// Stock goes in at the product's current buying price. Only Manage products can change
+// that price, on the product itself, so a delivery line never carries its own price.
+export function RestockLineItem({ products, locked, dense, value, onChange, onRemove }: RestockLineItemProps) {
   const product = products.find((p) => p.id === value.productId) ?? null
   const update = (patch: Partial<RestockLineState>) => onChange({ ...value, ...patch })
 
@@ -58,7 +58,7 @@ export function RestockLineItem({ products, isAdmin, locked, dense, value, onCha
     <ProductPicker
       products={products}
       selectedProductId={value.productId}
-      onSelect={(p) => update({ productId: p.id, price: value.price || String(p.buyingPricePerBag) })}
+      onSelect={(p) => update({ productId: p.id })}
       placeholder="Search product…"
       className={fieldInput}
     />
@@ -74,16 +74,6 @@ export function RestockLineItem({ products, isAdmin, locked, dense, value, onCha
       </button>
     </div>
   )
-
-  const priceField =
-    product &&
-    (isAdmin ? (
-      <FormattedNumberInput value={value.price} onChange={(raw) => update({ price: raw })} className={fieldInput} />
-    ) : (
-      <div className="mt-1 flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-        <LockIcon width={12} height={12} /> {toCurrency(product.buyingPricePerBag)}
-      </div>
-    ))
 
   // A single line of arithmetic — what's there now, what's arriving, what it
   // becomes — so a delivery can be checked against the note without scrolling.
@@ -105,7 +95,7 @@ export function RestockLineItem({ products, isAdmin, locked, dense, value, onCha
       <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
         <div className="flex items-end gap-2.5">
           <div className="grid flex-1 grid-cols-12 gap-2.5">
-            <div className={product ? 'col-span-4' : 'col-span-12'}>
+            <div className={product ? 'col-span-5' : 'col-span-12'}>
               <label className={fieldLabel}>Product</label>
               {productField}
             </div>
@@ -119,11 +109,7 @@ export function RestockLineItem({ products, isAdmin, locked, dense, value, onCha
                   <label className={fieldLabel}>{value.unitMode === 'BAGS' ? `Bags (${product.weightPerBag}kg)` : 'Kilograms'}</label>
                   <FormattedNumberInput value={value.quantity} onChange={(raw) => update({ quantity: raw })} className={fieldInput} />
                 </div>
-                <div className="col-span-2">
-                  <label className={fieldLabel}>Buy/bag</label>
-                  {priceField}
-                </div>
-                <div className="col-span-2">
+                <div className="col-span-3">
                   <label className={fieldLabel}>Reference</label>
                   <input
                     value={value.note}
@@ -181,15 +167,9 @@ export function RestockLineItem({ products, isAdmin, locked, dense, value, onCha
             </button>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <div>
-              <label className={fieldLabel}>{value.unitMode === 'BAGS' ? 'Number of bags' : 'Quantity (kg)'}</label>
-              <FormattedNumberInput value={value.quantity} onChange={(raw) => update({ quantity: raw })} className={fieldInput} />
-            </div>
-            <div>
-              <label className={fieldLabel}>Buying price/bag (KES)</label>
-              {priceField}
-            </div>
+          <div className="mt-3">
+            <label className={fieldLabel}>{value.unitMode === 'BAGS' ? 'Number of bags' : 'Quantity (kg)'}</label>
+            <FormattedNumberInput value={value.quantity} onChange={(raw) => update({ quantity: raw })} className={fieldInput} />
           </div>
 
           <label className={`mt-3 ${fieldLabel}`}>

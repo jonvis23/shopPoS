@@ -6,12 +6,12 @@ import { PrinterIcon } from '../../components/Icons'
 
 interface HardwareTabProps {
   settings: Record<string, string>
-  isAdmin: boolean
+  canManageSettings: boolean
   onSettingsChanged: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
 }
 
-export function HardwareTab({ settings, isAdmin, onSettingsChanged, showToast }: HardwareTabProps) {
+export function HardwareTab({ settings, canManageSettings, onSettingsChanged, showToast }: HardwareTabProps) {
   const [printing, setPrinting] = useState(false)
   const [printers, setPrinters] = useState<PrinterInfo[]>([])
   const [loadingPrinters, setLoadingPrinters] = useState(true)
@@ -129,7 +129,7 @@ export function HardwareTab({ settings, isAdmin, onSettingsChanged, showToast }:
         <select
           value={selectedPrinter}
           onChange={(event) => changePrinter(event.target.value)}
-          disabled={!isAdmin || loadingPrinters}
+          disabled={!canManageSettings || loadingPrinters}
           className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
         >
           <option value="">Not configured (simulate print)</option>
@@ -154,7 +154,7 @@ export function HardwareTab({ settings, isAdmin, onSettingsChanged, showToast }:
           <div className="text-sm font-medium text-slate-700 dark:text-slate-200">Auto-print receipt</div>
           <div className="text-xs text-slate-400">Print automatically when a sale is completed.</div>
         </div>
-        <Toggle checked={autoPrint} onChange={toggleAutoPrint} disabled={!isAdmin} />
+        <Toggle checked={autoPrint} onChange={toggleAutoPrint} disabled={!canManageSettings} />
       </div>
 
       <div className="mt-4 flex items-center justify-between">
@@ -164,7 +164,7 @@ export function HardwareTab({ settings, isAdmin, onSettingsChanged, showToast }:
             Pops up a touch keyboard when you tap a text box. A physical keyboard still works either way.
           </div>
         </div>
-        <Toggle checked={onScreenKeyboard} onChange={toggleOnScreenKeyboard} disabled={!isAdmin} />
+        <Toggle checked={onScreenKeyboard} onChange={toggleOnScreenKeyboard} disabled={!canManageSettings} />
       </div>
 
       <div className="mt-4 flex items-center justify-between">
@@ -176,7 +176,7 @@ export function HardwareTab({ settings, isAdmin, onSettingsChanged, showToast }:
               : 'Only available in the installed app, not when running from source.'}
           </div>
         </div>
-        <Toggle checked={autoStart} onChange={toggleAutoStart} disabled={!isAdmin || !autoStartAvailable} />
+        <Toggle checked={autoStart} onChange={toggleAutoStart} disabled={!canManageSettings || !autoStartAvailable} />
       </div>
 
       <button

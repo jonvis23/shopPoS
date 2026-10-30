@@ -201,3 +201,47 @@ html.theme-sage {
     transform: translateX(0);
   }
 }
+
+@keyframes tour-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.tour-card-in {
+  animation: tour-card-in 0.25s ease-out;
+}
+
+/* Where a letter starts, after a jump-rail tap. Inset shadow for the tint and outer ring
+   for the edge, so the card's own background and shadow are never overridden for long. */
+@keyframes letter-start-flash {
+  0% {
+    box-shadow:
+      0 0 0 3px rgb(16 185 129 / 0.9),
+      inset 0 0 0 999px rgb(16 185 129 / 0.18);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px rgb(16 185 129 / 0),
+      inset 0 0 0 999px rgb(16 185 129 / 0);
+  }
+}
+
+.letter-start-flash {
+  animation: letter-start-flash 1.8s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-card-in {
+    animation: none;
+  }
+  .letter-start-flash {
+    animation: none;
+    box-shadow: 0 0 0 3px rgb(16 185 129 / 0.9);
+  }
+}

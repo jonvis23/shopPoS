@@ -10,9 +10,12 @@ import { formatDateTime, formatTime } from '../../../shared/datetime'
 
 interface TransactionsPageProps {
   snapshot: DashboardSnapshot
-  isAdmin: boolean
+  canViewReports: boolean
+  canApproveVoids: boolean
   onProductsChanged: () => Promise<void> | void
   showToast: (kind: ToastState['kind'], message: string) => void
+  /** Opens the sale on the sell screen, with its items back in a cart to change. */
+  onEditSale: (sale: SaleRecord) => void
 }
 
 type PaymentFilter = 'ALL' | 'CASH' | 'MPESA' | 'SPLIT' | 'DEBT' | 'VOIDED' | 'TAKEHOME'
@@ -30,6 +33,12 @@ const FILTERS: Array<{ key: PaymentFilter; label: string; hint: string }> = [
     hint: 'Stock taken home rather than sold. No money moved — the value shown is what the goods cost.',
   },
 ]
+
+// Half a cent is floating-point residue from repayments, not money still owed.
+const DEBT_EPSILON = 0.005
+
+// How many items a row shows before it folds the rest behind "+N more".
+const FOLDED_ITEM_COUNT = 2
 
 function paymentKind(sale: SaleRecord): 'CASH' | 'MPESA' | 'SPLIT' | 'DEBT' {
   const methodsUsed = [sale.cashPaid > 0, sale.mpesaPaid > 0, sale.debtAmount > 0].filter(Boolean).length
@@ -81,6 +90,8 @@ function takeHomeMatchesFilter(filter: PaymentFilter): boolean {
   return filter === 'ALL' || filter === 'TAKEHOME'
 }
 
+type VoidTarget = { kind: 'sale'; sale: SaleRecord } | { kind: 'takeHome'; entry: DomesticConsumptionRecord }
+
 interface DayGroup {
   key: string
   label: string
@@ -89,7 +100,14 @@ interface DayGroup {
   takeHome: DomesticConsumptionRecord[]
 }
 
-export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToast }: TransactionsPageProps) {
+export function TransactionsPage({
+  snapshot,
+  canViewReports,
+  canApproveVoids,
+  onProductsChanged,
+  showToast,
+  onEditSale,
+}: TransactionsPageProps) {
   const [sales, setSales] = useState<SaleRecord[]>([])
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([])
   const [takeHome, setTakeHome] = useState<DomesticConsumptionRecord[]>([])
@@ -104,7 +122,7 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
 
   const [viewingSale, setViewingSale] = useState<SaleRecord | null>(null)
 
-  const [voidTarget, setVoidTarget] = useState<SaleRecord | null>(null)
+  const [voidTarget, setVoidTarget] = useState<VoidTarget | null>(null)
   const [voidReason, setVoidReason] = useState('')
   const [voiding, setVoiding] = useState(false)
 
@@ -146,6 +164,7 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
       return (
         sale.customerName.toLowerCase().includes(query) ||
         (sale.customerPhone ?? '').includes(query) ||
+        (sale.mpesaRef ?? '').toLowerCase().includes(query) ||
         formatReceiptNumber(sale.id).toLowerCase().includes(query)
       )
     })
@@ -233,22 +252,30 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
     if (!reason) return
     setVoiding(true)
     try {
-      await window.electronAPI.voidSale({ saleId: voidTarget.id, reason })
-      showToast('success', 'Sale voided')
+      if (voidTarget.kind === 'sale') {
+        await window.electronAPI.voidSale({ saleId: voidTarget.sale.id, reason })
+        showToast('success', 'Sale voided')
+      } else {
+        await window.electronAPI.voidDomesticConsumption({ id: voidTarget.entry.id, reason })
+        showToast('success', 'Take-home record voided')
+      }
       setVoidTarget(null)
       setVoidReason('')
       await load()
       await onProductsChanged()
     } catch (error) {
-      showToast('error', error instanceof Error ? error.message : 'Could not void sale')
+      showToast('error', error instanceof Error ? error.message : 'Could not void')
     } finally {
       setVoiding(false)
     }
   }
 
-  const canVoid = isAdmin || snapshot.settings.perm_allow_cashier_void === 'true'
+  const canVoid = canApproveVoids || snapshot.settings.perm_allow_cashier_void === 'true'
   const isVoidable = (sale: SaleRecord) =>
     canVoid && sale.status === 'COMPLETED' && snapshot.activeShift?.id === sale.shiftId
+  const isEditable = (sale: SaleRecord) => sale.status === 'COMPLETED' && snapshot.activeShift?.id === sale.shiftId
+  const isTakeHomeVoidable = (entry: DomesticConsumptionRecord) =>
+    canVoid && entry.status === 'COMPLETED' && snapshot.activeShift?.id === entry.shiftId
 
   const timeHeaderCell = (
     <th className="px-4 py-2.5">
@@ -294,7 +321,7 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by name, phone, or receipt #…"
+            placeholder="Search by name, phone, receipt # or M-Pesa code…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition-shadow focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
           />
         </div>
@@ -395,9 +422,11 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
                   .filter((s) => s.status !== 'VOID')
                   .reduce((sum, s) => sum + s.totalAmount, 0)
                 // Kept alongside revenue rather than netted off it, so this header
-                // still agrees with the Overview and the shift's Z-report.
+                // still agrees with Reports and the shift's Z-report.
                 const expenseTotal = group.expenses.reduce((sum, e) => sum + e.amount, 0)
-                const takeHomeTotal = group.takeHome.reduce((sum, t) => sum + t.costValue, 0)
+                const takeHomeTotal = group.takeHome
+                  .filter((t) => t.status !== 'VOID')
+                  .reduce((sum, t) => sum + t.costValue, 0)
                 return (
                   <Fragment key={group.key}>
                     <tr className="sticky top-0 z-10 border-t border-slate-200 bg-slate-100/95 backdrop-blur dark:border-slate-800 dark:bg-slate-800/95">
@@ -405,7 +434,7 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
                           chips living inside the toggle — the products pane is
                           itself a button, and a button can't nest in a button. */}
                       <td colSpan={8} className="px-4 py-2">
-                        <div className="flex w-full items-center justify-between gap-3">
+                        <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
                           <button
                             type="button"
                             onClick={() => toggleDay(group.key)}
@@ -419,25 +448,25 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
                             />
                             <span className="truncate">{group.label}</span>
                           </button>
-                          <div className="flex shrink-0 items-center gap-1.5">
-                            <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-500 shadow-sm dark:bg-slate-900 dark:text-slate-400">
+                          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+                            <span className="flex flex-wrap items-center gap-x-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-500 shadow-sm dark:bg-slate-900 dark:text-slate-400">
                               {group.sales.length} Transaction{group.sales.length === 1 ? '' : 's'}
-                              {isAdmin && <> · Revenue: {toCurrency(revenueTotal)}</>}
-                              {isAdmin && expenseTotal > 0 && (
+                              {canViewReports && <> · Revenue: {toCurrency(revenueTotal)}</>}
+                              {canViewReports && expenseTotal > 0 && (
                                 <span className="text-red-500 dark:text-red-400">
                                   {' '}
                                   · Expenses: {toCurrency(expenseTotal)}
                                 </span>
                               )}
                               {/* Amber, not red: no cash left the till here, only stock. */}
-                              {isAdmin && takeHomeTotal > 0 && (
+                              {canViewReports && takeHomeTotal > 0 && (
                                 <span className="text-amber-600 dark:text-amber-400">
                                   {' '}
                                   · Taken home: {toCurrency(takeHomeTotal)}
                                 </span>
                               )}
                             </span>
-                            <DayProductsChip sales={group.sales} isAdmin={isAdmin} />
+                            <DayProductsChip sales={group.sales} canViewReports={canViewReports} />
                           </div>
                         </div>
                       </td>
@@ -450,8 +479,10 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
                           timeOnly
                           voidable={isVoidable(sale)}
                           canVoid={canVoid}
+                          editable={isEditable(sale)}
                           onView={() => setViewingSale(sale)}
-                          onVoidClick={() => setVoidTarget(sale)}
+                          onEdit={() => onEditSale(sale)}
+                          onVoidClick={() => setVoidTarget({ kind: 'sale', sale })}
                         />
                       ))}
                     {!collapsed &&
@@ -460,7 +491,14 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
                       ))}
                     {!collapsed &&
                       group.takeHome.map((entry) => (
-                        <TakeHomeRow key={`t${entry.id}`} entry={entry} timeOnly />
+                        <TakeHomeRow
+                          key={`t${entry.id}`}
+                          entry={entry}
+                          timeOnly
+                          voidable={isTakeHomeVoidable(entry)}
+                          canVoid={canVoid}
+                          onVoidClick={() => setVoidTarget({ kind: 'takeHome', entry })}
+                        />
                       ))}
                   </Fragment>
                 )
@@ -498,13 +536,22 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
                     timeOnly={false}
                     voidable={isVoidable(entry.sale)}
                     canVoid={canVoid}
+                    editable={isEditable(entry.sale)}
                     onView={() => setViewingSale(entry.sale)}
-                    onVoidClick={() => setVoidTarget(entry.sale)}
+                    onEdit={() => onEditSale(entry.sale)}
+                    onVoidClick={() => setVoidTarget({ kind: 'sale', sale: entry.sale })}
                   />
                 ) : entry.kind === 'expense' ? (
                   <ExpenseRow key={`e${entry.expense.id}`} expense={entry.expense} timeOnly={false} />
                 ) : (
-                  <TakeHomeRow key={`t${entry.entry.id}`} entry={entry.entry} timeOnly={false} />
+                  <TakeHomeRow
+                    key={`t${entry.entry.id}`}
+                    entry={entry.entry}
+                    timeOnly={false}
+                    voidable={isTakeHomeVoidable(entry.entry)}
+                    canVoid={canVoid}
+                    onVoidClick={() => setVoidTarget({ kind: 'takeHome', entry: entry.entry })}
+                  />
                 )
               )}
             </tbody>
@@ -519,7 +566,19 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
       )}
 
       {viewingSale && (
-        <TransactionDetailModal sale={viewingSale} onClose={() => setViewingSale(null)} showToast={showToast} />
+        <TransactionDetailModal
+          sale={viewingSale}
+          onClose={() => setViewingSale(null)}
+          showToast={showToast}
+          onEdit={
+            isEditable(viewingSale)
+              ? () => {
+                  setViewingSale(null)
+                  onEditSale(viewingSale)
+                }
+              : undefined
+          }
+        />
       )}
 
       {voidTarget && (
@@ -527,7 +586,9 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
           <div className="w-full max-w-sm rounded-2xl border border-slate-200/60 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Void sale {formatReceiptNumber(voidTarget.id)}
+                {voidTarget.kind === 'sale'
+                  ? `Void sale ${formatReceiptNumber(voidTarget.sale.id)}`
+                  : `Void ${voidTarget.entry.productName} taken home`}
               </h3>
               <button
                 type="button"
@@ -541,11 +602,21 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
               </button>
             </div>
             <p className="mt-1 text-xs text-slate-400">
-              This restores {voidTarget.items.length} item{voidTarget.items.length === 1 ? '' : 's'} to stock
-              {voidTarget.debtAmount > 0
-                ? ` and clears ${toCurrency(voidTarget.debtAmount)} of debt for ${voidTarget.customerName}`
-                : ''}
-              . This cannot be undone.
+              {voidTarget.kind === 'sale' ? (
+                <>
+                  This restores {voidTarget.sale.items.length} item{voidTarget.sale.items.length === 1 ? '' : 's'} to
+                  stock
+                  {voidTarget.sale.debtAmount > 0
+                    ? ` and clears ${toCurrency(voidTarget.sale.debtAmount)} of debt for ${voidTarget.sale.customerName}`
+                    : ''}
+                  . Any debt payment taken with this sale is reversed too. This cannot be undone.
+                </>
+              ) : (
+                <>
+                  This restores {formatKgCompact(voidTarget.entry.quantityKg)} of {voidTarget.entry.productName} to
+                  stock. This cannot be undone.
+                </>
+              )}
             </p>
 
             <label className="mt-3 block text-xs font-semibold text-slate-500 dark:text-slate-400">
@@ -566,7 +637,7 @@ export function TransactionsPage({ snapshot, isAdmin, onProductsChanged, showToa
               onClick={submitVoid}
               className="mt-4 w-full rounded-xl bg-red-500 py-2.5 text-sm font-semibold text-white shadow-sm shadow-red-500/30 transition-all duration-150 hover:bg-red-600 active:scale-[0.98] disabled:opacity-50"
             >
-              {voiding ? 'Voiding…' : 'Void sale'}
+              {voiding ? 'Voiding…' : voidTarget.kind === 'sale' ? 'Void sale' : 'Void take-home'}
             </button>
           </div>
         </div>
@@ -580,7 +651,9 @@ interface TransactionRowProps {
   timeOnly: boolean
   voidable: boolean
   canVoid: boolean
+  editable: boolean
   onView: () => void
+  onEdit: () => void
   onVoidClick: () => void
 }
 
@@ -620,9 +693,25 @@ function ExpenseRow({ expense, timeOnly }: { expense: ExpenseRecord; timeOnly: b
 // both are deductions, but no money moved here, so it must not read as a payment.
 // The Payment column carries the weight instead — the only figure that makes sense
 // for a row where nothing was paid.
-function TakeHomeRow({ entry, timeOnly }: { entry: DomesticConsumptionRecord; timeOnly: boolean }) {
+function TakeHomeRow({
+  entry,
+  timeOnly,
+  voidable,
+  canVoid,
+  onVoidClick,
+}: {
+  entry: DomesticConsumptionRecord
+  timeOnly: boolean
+  voidable: boolean
+  canVoid: boolean
+  onVoidClick: () => void
+}) {
   return (
-    <tr className="border-t border-slate-100 bg-amber-50/40 transition-colors hover:bg-amber-50 dark:border-slate-800 dark:bg-amber-500/5 dark:hover:bg-amber-500/10">
+    <tr
+      className={`border-t border-slate-100 bg-amber-50/40 transition-colors hover:bg-amber-50 dark:border-slate-800 dark:bg-amber-500/5 dark:hover:bg-amber-500/10 ${
+        entry.status === 'VOID' ? 'opacity-60' : ''
+      }`}
+    >
       <td className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-amber-500">Taken home</td>
       <td className="px-4 py-2.5 text-xs tabular-nums text-slate-500 dark:text-slate-400">
         {timeOnly ? formatTime(entry.createdAt) : formatDateTime(entry.createdAt)}
@@ -641,19 +730,51 @@ function TakeHomeRow({ entry, timeOnly }: { entry: DomesticConsumptionRecord; ti
         </span>
       </td>
       <td className="px-4 py-2.5">
-        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-600 dark:bg-amber-950/40 dark:text-amber-400">
-          Stock out
-        </span>
+        {entry.status === 'VOID' ? (
+          <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600 dark:bg-red-950/40 dark:text-red-400">
+            Voided
+          </span>
+        ) : (
+          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-600 dark:bg-amber-950/40 dark:text-amber-400">
+            Stock out
+          </span>
+        )}
       </td>
-      <td className="px-4 py-2.5" />
+      <td className="px-4 py-2.5">
+        <div className="flex items-center justify-end text-xs">
+          <button
+            type="button"
+            disabled={!voidable}
+            onClick={() => voidable && onVoidClick()}
+            title={
+              entry.status === 'VOID'
+                ? 'Already voided'
+                : voidable
+                  ? undefined
+                  : !canVoid
+                    ? 'Not permitted'
+                    : 'Only take-home records from the current open shift can be voided'
+            }
+            className={`font-semibold ${
+              voidable ? 'text-red-500 hover:underline' : 'cursor-not-allowed text-slate-300 dark:text-slate-700'
+            }`}
+          >
+            Void
+          </button>
+        </div>
+      </td>
     </tr>
   )
 }
 
-function TransactionRow({ sale, timeOnly, voidable, canVoid, onView, onVoidClick }: TransactionRowProps) {
+function TransactionRow({ sale, timeOnly, voidable, canVoid, editable, onView, onEdit, onVoidClick }: TransactionRowProps) {
+  const [itemsOpen, setItemsOpen] = useState(false)
+  const shownItems = itemsOpen ? sale.items : sale.items.slice(0, FOLDED_ITEM_COUNT)
+  const hiddenCount = sale.items.length - shownItems.length
+
   return (
     <tr
-      className={`group border-t border-slate-100 transition-colors hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40 ${
+      className={`group whitespace-nowrap border-t border-slate-100 transition-colors hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40 ${
         sale.status === 'VOID' ? 'opacity-60' : ''
       }`}
     >
@@ -663,26 +784,41 @@ function TransactionRow({ sale, timeOnly, voidable, canVoid, onView, onVoidClick
       <td className="px-4 py-2.5 text-xs tabular-nums text-slate-500 dark:text-slate-400">
         {timeOnly ? formatTime(sale.createdAt) : formatDateTime(sale.createdAt)}
       </td>
-      <td className="px-4 py-2.5">
+      <td className="whitespace-normal px-4 py-2.5">
         <div className="font-medium text-slate-800 dark:text-slate-100">{sale.customerName}</div>
         {sale.customerPhone && <div className="text-xs tabular-nums text-slate-400">{sale.customerPhone}</div>}
       </td>
-      {/* The whole cart on one 11px line, clipped rather than wrapped — naming what
-          was actually bought beats "3 items", but not at the cost of a taller row
-          on every line of the table. Hovering the row lets it wrap and grow, so a
-          long cart is read in place instead of in a tooltip. */}
-      <td className="px-4 py-2.5">
-        <div className="max-w-[20rem] overflow-hidden text-ellipsis whitespace-nowrap text-[11px] leading-relaxed text-slate-600 group-hover:whitespace-normal dark:text-slate-300">
-          {sale.items.map((item, index) => (
-            <Fragment key={item.id}>
-              {index > 0 && <span className="text-slate-300 dark:text-slate-600"> • </span>}
-              <span className="whitespace-nowrap">
-                {item.productName}
-                <span className="text-slate-400 dark:text-slate-500">({formatKgCompact(item.quantityKg)})</span>
-              </span>
-            </Fragment>
-          ))}
-        </div>
+      {/* Items wrap into the space the table has, so nothing is cut off on a narrow
+          screen. A long cart folds to its first few items, and "+N more" opens the
+          rest in place. */}
+      <td className="whitespace-normal px-4 py-2.5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+        {shownItems.map((item, index) => (
+          <Fragment key={item.id}>
+            {index > 0 && <span className="text-slate-300 dark:text-slate-600"> • </span>}
+            <span className="whitespace-nowrap">
+              {item.productName}
+              <span className="text-slate-400 dark:text-slate-500">({formatKgCompact(item.quantityKg)})</span>
+            </span>
+          </Fragment>
+        ))}
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setItemsOpen(true)}
+            className="ml-1.5 font-semibold text-emerald-600 hover:underline dark:text-emerald-400"
+          >
+            +{hiddenCount} more
+          </button>
+        )}
+        {itemsOpen && sale.items.length > FOLDED_ITEM_COUNT && (
+          <button
+            type="button"
+            onClick={() => setItemsOpen(false)}
+            className="ml-1.5 font-semibold text-slate-400 hover:underline"
+          >
+            Show less
+          </button>
+        )}
       </td>
       <td className="px-4 py-2.5 font-semibold tabular-nums text-slate-800 dark:text-slate-100">
         {toCurrency(sale.totalAmount)}
@@ -697,9 +833,16 @@ function TransactionRow({ sale, timeOnly, voidable, canVoid, onView, onVoidClick
           <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600 dark:bg-red-950/40 dark:text-red-400">
             Voided
           </span>
+        ) : sale.debtAmount > 0 && sale.debtOutstanding > DEBT_EPSILON ? (
+          <span
+            className="whitespace-nowrap rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-600 dark:bg-amber-500/10 dark:text-amber-400"
+            title="Credit still owed on this sale"
+          >
+            {sale.debtOutstanding < sale.debtAmount ? `Debt · ${toCurrency(sale.debtOutstanding)} left` : 'Debt'}
+          </span>
         ) : sale.debtAmount > 0 ? (
-          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-600 dark:bg-amber-500/10 dark:text-amber-400">
-            Debt
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+            Paid
           </span>
         ) : (
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
@@ -717,6 +860,16 @@ function TransactionRow({ sale, timeOnly, voidable, canVoid, onView, onVoidClick
           >
             View
           </button>
+          {editable && (
+            <button
+              type="button"
+              onClick={onEdit}
+              title="Change what was sold on this sale. The original is kept on record as voided."
+              className="font-semibold text-emerald-600 hover:underline dark:text-emerald-400"
+            >
+              Edit
+            </button>
+          )}
           <button
             type="button"
             disabled={!voidable}
